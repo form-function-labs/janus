@@ -56,6 +56,7 @@ class Settings:
     mine_corrections: bool = True
     max_corrections: int = 20
     surface: Surface = Surface.MEMORY
+    judge_model: str = ""
 
 
 def _default_target(surface: Surface) -> Path:
@@ -117,6 +118,7 @@ def load_settings() -> Settings:
         ignore_patterns=ignore,
         mine_corrections=_env_bool("JANUS_MINE_CORRECTIONS", True),
         max_corrections=_env_int("JANUS_MAX_CORRECTIONS", 20),
+        judge_model=os.environ.get("JANUS_JUDGE_MODEL", ""),
     )
 
 
@@ -146,7 +148,10 @@ def build_cycle(settings: Settings) -> Cycle:
         ),
         miner=_build_miner(settings),
         target=ClaudeCliWorker(
-            role="target", model=settings.target_model, claude_path=settings.claude_path
+            role="target",
+            model=settings.target_model,
+            claude_path=settings.claude_path,
+            judge_model=settings.judge_model,
         ),
         optimizer=ClaudeCliWorker(
             role="optimizer",

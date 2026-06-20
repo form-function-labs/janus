@@ -63,10 +63,14 @@ class ClaudeCliWorker:
         surface: Surface = Surface.MEMORY,
         claude_path: str = "claude",
         timeout: int = 120,
+        judge_model: str = "",
     ) -> None:
         self.role = role
         self.surface = surface
         self._model = model
+        # A separate (typically stronger) model for grading rollouts. Empty =
+        # judge with the same model that executes — set it to lift eval reliability.
+        self._judge_model = judge_model or model
         self._claude = claude_path
         self._timeout = timeout
 
@@ -90,7 +94,7 @@ class ClaudeCliWorker:
         )
 
     def _judge(self, intent: str, output: str, rubric: str = "") -> Score:
-        verdict = self._call(_judge_prompt(intent, output, rubric))
+        verdict = self._call(_judge_prompt(intent, output, rubric), model=self._judge_model)
         return Score(_parse_score(verdict))
 
     # --- optimizer role -------------------------------------------------
@@ -115,11 +119,16 @@ class ClaudeCliWorker:
         return _parse_verdict(raw)
 
     # --- transport ------------------------------------------------------
-    def _call(self, prompt: str) -> str:
+    def _build_cmd(self, prompt: str, model: str) -> list[str]:
         cmd = [self._claude, "-p", "--output-format", "text", *_ISOLATION_FLAGS]
-        if self._model:
-            cmd += ["--model", self._model]
+        use_model = model or self._model
+        if use_model:
+            cmd += ["--model", use_model]
         cmd += ["--", prompt]
+        return cmd
+
+    def _call(self, prompt: str, model: str = "") -> str:
+        cmd = self._build_cmd(prompt, model)
         env = dict(os.environ, JANUS_REVIEWING="1")
         with tempfile.TemporaryDirectory() as cwd:
             try:
