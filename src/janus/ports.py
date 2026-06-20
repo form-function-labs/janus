@@ -13,7 +13,15 @@ from collections.abc import Sequence
 from typing import Protocol
 
 from .domain.proposal import AdoptResult, Proposal
-from .domain.types import Edit, RealTask, RolloutResult, SessionDigest, Surface, Task
+from .domain.types import (
+    CorrectionVerdict,
+    Edit,
+    RealTask,
+    RolloutResult,
+    SessionDigest,
+    Surface,
+    Task,
+)
 
 
 class TranscriptHarvester(Protocol):
@@ -22,6 +30,12 @@ class TranscriptHarvester(Protocol):
 
 class RecurrenceMiner(Protocol):
     def mine(self, digests: Sequence[SessionDigest]) -> Sequence[RealTask]: ...
+
+
+class CorrectionClassifier(Protocol):
+    """Confirms whether a candidate correction is genuine and extracts its rubric."""
+
+    def classify_correction(self, request: str, correction: str) -> CorrectionVerdict: ...
 
 
 class TargetWorker(Protocol):

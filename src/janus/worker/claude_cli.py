@@ -1,4 +1,5 @@
-"""The only adapter that talks to a model: ``claude -p`` as both target and optimizer.
+"""The only adapter that talks to a model: ``claude -p`` as target, optimizer, and
+correction classifier.
 
 Isolation flags mirror SkillOpt-Sleep's fix for the ambient-context leak
 (``--bare`` and friends) and work on an API key — the chosen auth. **Fail loud**:
@@ -22,7 +23,16 @@ from collections.abc import Sequence
 
 from beartype import beartype
 
-from ..domain.types import Edit, EditOp, RolloutResult, Score, Surface, Task
+from ..domain.types import (
+    CorrectionVerdict,
+    Edit,
+    EditOp,
+    RealTask,
+    RolloutResult,
+    Score,
+    Surface,
+    Task,
+)
 
 _ISOLATION_FLAGS: tuple[str, ...] = (
     "--bare",
@@ -41,7 +51,8 @@ class WorkerError(RuntimeError):
 
 
 class ClaudeCliWorker:
-    """Implements both ``TargetWorker.run`` and ``OptimizerWorker.reflect``."""
+    """Implements ``TargetWorker.run``, ``OptimizerWorker.reflect``, and
+    ``CorrectionClassifier.classify_correction``."""
 
     def __init__(
         self,
@@ -62,12 +73,13 @@ class ClaudeCliWorker:
     @beartype
     def run(self, task: Task, context: str) -> RolloutResult:
         output = self._call(_run_prompt(task.intent, context))
-        score = self._judge(task.intent, output)
+        rubric = task.rubric if isinstance(task, RealTask) else ""
+        score = self._judge(task.intent, output, rubric)
         # Memory-surface tasks run text-only (tools disallowed), so no tool use.
         return RolloutResult(task.id, score, tool_invoked=False, transcript=output)
 
-    def _judge(self, intent: str, output: str) -> Score:
-        verdict = self._call(_judge_prompt(intent, output))
+    def _judge(self, intent: str, output: str, rubric: str = "") -> Score:
+        verdict = self._call(_judge_prompt(intent, output, rubric))
         return Score(_parse_score(verdict))
 
     # --- optimizer role -------------------------------------------------
@@ -84,6 +96,12 @@ class ClaudeCliWorker:
                 _reflect_prompt(state_text, failures, successes, self.surface, strict=True)
             )
             return _parse_edits(raw, self.surface)
+
+    # --- correction classifier role -------------------------------------
+    @beartype
+    def classify_correction(self, request: str, correction: str) -> CorrectionVerdict:
+        raw = self._call(_classify_prompt(request, correction))
+        return _parse_verdict(raw)
 
     # --- transport ------------------------------------------------------
     def _call(self, prompt: str) -> str:
@@ -119,12 +137,28 @@ def _run_prompt(intent: str, context: str) -> str:
     return f"Complete the task as well as you can.{guidance}\nTask: {intent}\n"
 
 
-def _judge_prompt(intent: str, output: str) -> str:
+def _judge_prompt(intent: str, output: str, rubric: str = "") -> str:
+    criterion = f"It MUST satisfy this requirement: {rubric}\n" if rubric else ""
     return (
         "Grade how well the answer accomplishes the task.\n"
         f"Task: {intent}\n"
+        f"{criterion}"
         f"Answer: {output[:2000]}\n"
-        "Respond with ONLY a single number from 0.0 (useless) to 1.0 (fully correct)."
+        "Respond with ONLY a single number from 0.0 (fails) to 1.0 (fully satisfies)."
+    )
+
+
+def _classify_prompt(request: str, correction: str) -> str:
+    return (
+        "A user said the message below to an AI coding agent right after the agent acted. "
+        "Decide whether it is a CORRECTION of the agent's behaviour (telling it it did "
+        "something wrong or should do it differently) — as opposed to a new request, a "
+        "question, gratitude, or a casual remark.\n"
+        f"Prior request: {request[:300]}\n"
+        f"User message: {correction[:300]}\n"
+        'Respond with ONLY JSON: {"is_correction": true|false, '
+        '"rubric": "<one-line testable criterion the output must satisfy, or empty>", '
+        '"lesson": "<one-line durable rule worth remembering, or empty>"}.'
     )
 
 
@@ -180,6 +214,22 @@ def _extract_json(text: str) -> object:
     except json.JSONDecodeError as exc:
         raise ValueError(f"invalid JSON in model output: {exc}") from exc
     return obj
+
+
+def _parse_verdict(text: str) -> CorrectionVerdict:
+    try:
+        obj = _extract_json(text)
+    except ValueError:
+        return CorrectionVerdict(False)
+    if not isinstance(obj, dict):
+        return CorrectionVerdict(False)
+    rubric = obj.get("rubric")
+    lesson = obj.get("lesson")
+    return CorrectionVerdict(
+        bool(obj.get("is_correction")),
+        rubric if isinstance(rubric, str) else "",
+        lesson if isinstance(lesson, str) else "",
+    )
 
 
 def _parse_edits(text: str, surface: Surface) -> tuple[Edit, ...]:

@@ -19,7 +19,8 @@ from .domain.gate import GatePolicy
 from .domain.split import SplitConfig
 from .domain.types import Surface
 from .harvest import JsonlTranscriptHarvester
-from .mine import HeuristicMiner
+from .mine import CompositeMiner, CorrectionMiner, HeuristicMiner
+from .ports import RecurrenceMiner
 from .recursion import ReflectionInProgress, ReflectionLock
 from .store import FileAdopter, FileProposalStore, MemoryTextState
 from .worker import ClaudeCliWorker, WorkerError
@@ -39,6 +40,8 @@ class Settings:
     min_net: int
     regression_budget: int
     ignore_patterns: tuple[str, ...] = ()
+    mine_corrections: bool = True
+    max_corrections: int = 20
 
 
 def _default_target() -> Path:
@@ -58,6 +61,13 @@ def _env_float(name: str, default: float) -> float:
         return float(os.environ.get(name, str(default)))
     except ValueError:
         return default
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    return value.strip().lower() in ("1", "true", "yes", "on")
 
 
 def load_settings() -> Settings:
@@ -83,14 +93,26 @@ def load_settings() -> Settings:
         min_net=_env_int("JANUS_MIN_NET", 1),
         regression_budget=_env_int("JANUS_REGRESSION_BUDGET", 0),
         ignore_patterns=ignore,
+        mine_corrections=_env_bool("JANUS_MINE_CORRECTIONS", True),
+        max_corrections=_env_int("JANUS_MAX_CORRECTIONS", 20),
     )
+
+
+def _build_miner(settings: Settings) -> RecurrenceMiner:
+    heuristic = HeuristicMiner(settings.min_recurrence)
+    if not settings.mine_corrections:
+        return heuristic
+    classifier = ClaudeCliWorker(
+        role="classifier", model=settings.target_model, claude_path=settings.claude_path
+    )
+    return CompositeMiner(heuristic, CorrectionMiner(classifier, settings.max_corrections))
 
 
 def build_cycle(settings: Settings) -> Cycle:
     clock = SystemClock()
     return Cycle(
         harvester=JsonlTranscriptHarvester(settings.projects_dir, settings.ignore_patterns),
-        miner=HeuristicMiner(settings.min_recurrence),
+        miner=_build_miner(settings),
         target=ClaudeCliWorker(
             role="target", model=settings.target_model, claude_path=settings.claude_path
         ),
@@ -141,10 +163,12 @@ def _dispatch(action: str) -> int:
         digests = JsonlTranscriptHarvester(
             settings.projects_dir, settings.ignore_patterns
         ).harvest()
+        candidate_corrections = sum(len(d.corrections) for d in digests)
         tasks = HeuristicMiner(settings.min_recurrence).mine(digests)
         print(f"harvested {len(digests)} session(s); {len(tasks)} recurring task(s):")
         for task in tasks:
             print(f"  - [{len(task.source_sessions)}x] {task.intent[:80]}")
+        print(f"+ {candidate_corrections} candidate correction(s) (classified during run).")
         return 0
 
     if action in ("dry-run", "run"):
