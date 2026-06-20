@@ -111,7 +111,9 @@ def _build_miner(settings: Settings) -> RecurrenceMiner:
 def build_cycle(settings: Settings) -> Cycle:
     clock = SystemClock()
     return Cycle(
-        harvester=JsonlTranscriptHarvester(settings.projects_dir, settings.ignore_patterns),
+        harvester=JsonlTranscriptHarvester(
+            settings.projects_dir, settings.ignore_patterns, settings.home / "archive"
+        ),
         miner=_build_miner(settings),
         target=ClaudeCliWorker(
             role="target", model=settings.target_model, claude_path=settings.claude_path
@@ -161,7 +163,7 @@ def _dispatch(action: str) -> int:
 
     if action == "harvest":
         digests = JsonlTranscriptHarvester(
-            settings.projects_dir, settings.ignore_patterns
+            settings.projects_dir, settings.ignore_patterns, settings.home / "archive"
         ).harvest()
         candidate_corrections = sum(len(d.corrections) for d in digests)
         tasks = HeuristicMiner(settings.min_recurrence).mine(digests)

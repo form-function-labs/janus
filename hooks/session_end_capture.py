@@ -3,8 +3,9 @@
 
 Fires on every SessionEnd. No model call: it parses the finished transcript,
 decides whether the session did enough real work to be worth reviewing later,
-and if so queues a *pointer* to it. The expensive reflection happens later in
-`janus run`.
+queues a pointer, and **durably archives the transcript** (gzipped) so Janus's
+corpus survives Claude Code's transcript pruning. The expensive reflection
+happens later in ``janus run``.
 
 Stdlib-only and defensive by construction: it must never raise into the
 session-teardown path, so the whole body is guarded and it always exits 0.
@@ -12,8 +13,10 @@ session-teardown path, so the whole body is guarded and it always exits 0.
 
 from __future__ import annotations
 
+import gzip
 import json
 import os
+import shutil
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
@@ -43,6 +46,23 @@ def _count_tool_calls(transcript: Path) -> int:
     except OSError:
         return 0
     return n
+
+
+def _archive(transcript: Path, home: Path, cwd: str) -> None:
+    """Durably gzip-copy the transcript so the corpus survives pruning. Idempotent."""
+    try:
+        encoded = cwd.replace("/", "-") or "unknown"
+        dest_dir = home / "archive" / encoded
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        dest = dest_dir / (transcript.stem + ".jsonl.gz")
+        if dest.exists():
+            return
+        tmp = dest.parent / (dest.name + ".tmp")
+        with transcript.open("rb") as src, gzip.open(tmp, "wb") as out:
+            shutil.copyfileobj(src, out)
+        os.replace(tmp, dest)  # atomic
+    except OSError:
+        return
 
 
 def main() -> int:
@@ -78,9 +98,9 @@ def main() -> int:
         return 0
 
     home.mkdir(parents=True, exist_ok=True)
-    inbox = home / "inbox.jsonl"
+    _archive(transcript, home, str(data.get("cwd") or ""))
 
-    # Dedup: skip if this transcript is already queued.
+    inbox = home / "inbox.jsonl"
     key = str(transcript)
     if inbox.exists():
         try:

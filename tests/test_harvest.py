@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import gzip
 import json
 from collections.abc import Sequence
 from pathlib import Path
@@ -164,6 +165,49 @@ def test_harvest_extracts_correction_candidates(tmp_path: Path) -> None:
     assert len(digest.corrections) == 1
     assert digest.corrections[0].request == "implement auth"
     assert "JWT" in digest.corrections[0].correction
+
+
+def test_harvest_reads_gzipped_archive(tmp_path: Path) -> None:
+    projects = tmp_path / "projects"
+    archive = tmp_path / "archive"
+    (projects / "p").mkdir(parents=True)
+    (archive / "p").mkdir(parents=True)
+    _write(
+        projects / "p" / "live.jsonl",
+        [{"sessionId": "live", "cwd": "/a/b", "message": {"role": "user", "content": "live task"}}],
+    )
+    with gzip.open(archive / "p" / "arch.jsonl.gz", "wt", encoding="utf-8") as fh:
+        fh.write(
+            json.dumps(
+                {
+                    "sessionId": "arch",
+                    "cwd": "/a/b",
+                    "message": {"role": "user", "content": "archived task"},
+                }
+            )
+        )
+    digests = JsonlTranscriptHarvester(projects, archive_dir=archive).harvest()
+    assert {d.intent for d in digests} == {"live task", "archived task"}
+
+
+def test_harvest_dedups_live_over_archive(tmp_path: Path) -> None:
+    projects = tmp_path / "projects"
+    archive = tmp_path / "archive"
+    (projects / "p").mkdir(parents=True)
+    (archive / "p").mkdir(parents=True)
+    _write(
+        projects / "p" / "s.jsonl",
+        [{"sessionId": "dup", "cwd": "/a/b", "message": {"role": "user", "content": "fresh"}}],
+    )
+    with gzip.open(archive / "p" / "s.jsonl.gz", "wt", encoding="utf-8") as fh:
+        fh.write(
+            json.dumps(
+                {"sessionId": "dup", "cwd": "/a/b", "message": {"role": "user", "content": "stale"}}
+            )
+        )
+    digests = JsonlTranscriptHarvester(projects, archive_dir=archive).harvest()
+    assert len(digests) == 1
+    assert digests[0].intent == "fresh"  # live iterated first, wins the dedup
 
 
 def test_corrupt_lines_are_tolerated(tmp_path: Path) -> None:

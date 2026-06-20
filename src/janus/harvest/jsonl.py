@@ -3,12 +3,17 @@
 Reads ``~/.claude/projects/<encoded-cwd>/<session>.jsonl`` one line at a time —
 single pass, O(1) memory, corrupt-line-tolerant — and emits cheap
 ``SessionDigest`` value objects (recurring-task intent + correction pairs).
-``beartype`` guards the boundary so the typed contract holds even though the
-input is untrusted JSON whose schema can drift.
+
+Also reads Janus's own durable archive (``~/.janus/archive/.../<session>.jsonl.gz``)
+as a second root, so the corpus survives Claude Code's transcript pruning.
+Live and archived sessions are deduped by ``session_id`` (live wins). ``beartype``
+guards the boundary so the typed contract holds even though the input is
+untrusted JSON whose schema can drift.
 """
 
 from __future__ import annotations
 
+import gzip
 import json
 import re
 from collections.abc import Iterator, Sequence
@@ -31,6 +36,8 @@ _NOISE_PREFIXES = (
     "<command-",
     "<local-command-",
     "<bash-",
+    "<task-notification>",
+    "<teammate-message",
 )
 _NOISE_SUBSTRINGS = (
     "This session is being continued from a previous conversation",
@@ -90,8 +97,10 @@ class JsonlTranscriptHarvester:
         self,
         projects_dir: Path | None = None,
         ignore_patterns: Sequence[str] = (),
+        archive_dir: Path | None = None,
     ) -> None:
         self._root = projects_dir or (Path.home() / ".claude" / "projects")
+        self._archive = archive_dir
         # User-configured noise (e.g. an automation's prompt). Case-insensitive
         # substring match — generic harness noise is handled above, for everyone.
         self._ignore = tuple(p.lower() for p in ignore_patterns if p.strip())
@@ -100,19 +109,25 @@ class JsonlTranscriptHarvester:
         low = text.lower()
         return any(pattern in low for pattern in self._ignore)
 
+    def _transcripts(self) -> Iterator[Path]:
+        if self._root.is_dir():
+            yield from sorted(self._root.glob("*/*.jsonl"))
+        if self._archive is not None and self._archive.is_dir():
+            yield from sorted(self._archive.glob("*/*.jsonl.gz"))
+
     @beartype
     def harvest(self, since: float | None = None) -> Sequence[SessionDigest]:
         digests: list[SessionDigest] = []
-        if not self._root.is_dir():
-            return digests
-        for transcript in sorted(self._root.glob("*/*.jsonl")):
+        seen: set[str] = set()
+        for transcript in self._transcripts():
             try:
                 if since is not None and transcript.stat().st_mtime < since:
                     continue
             except OSError:
                 continue
             digest = self._digest(transcript)
-            if digest is not None:
+            if digest is not None and digest.session_id not in seen:
+                seen.add(digest.session_id)
                 digests.append(digest)
         return digests
 
@@ -154,7 +169,7 @@ class JsonlTranscriptHarvester:
         if not saw_record:
             return None
         if not session_id:
-            session_id = transcript.stem
+            session_id = transcript.stem.removesuffix(".jsonl")
         project = Path(cwd).name if cwd else transcript.parent.name
         return SessionDigest(
             session_id, project, cwd, intent, tool_calls, str(transcript), tuple(corrections)
@@ -163,7 +178,11 @@ class JsonlTranscriptHarvester:
     @staticmethod
     def _stream(transcript: Path) -> Iterator[dict[str, object]]:
         try:
-            with transcript.open(encoding="utf-8", errors="replace") as fh:
+            if transcript.suffix == ".gz":
+                fh = gzip.open(transcript, "rt", encoding="utf-8", errors="replace")  # noqa: SIM115
+            else:
+                fh = transcript.open(encoding="utf-8", errors="replace")
+            with fh:  # both branches are closed here
                 for raw in fh:
                     line = raw.strip()
                     if not line:
