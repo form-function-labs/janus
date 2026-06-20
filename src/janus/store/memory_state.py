@@ -1,9 +1,12 @@
-"""The memory text-state adapter.
+"""Bounded markdown text-state — one implementation, three surfaces.
 
 Edits land **only** inside a protected ``LEARNED`` block; everything the user
 hand-wrote outside it is preserved verbatim. This is the guarantee that the
 optimizer can never clobber human content — it only ever re-emits its own block.
-The block is rendered at the end of the document; the rest is left untouched.
+
+``BlockTextState`` is parameterized by ``Surface`` so memory, skills, and
+CLAUDE.md all ride the same gate/loop; only edits matching the state's surface
+are applied.
 """
 
 from __future__ import annotations
@@ -44,10 +47,10 @@ def _strip_block(doc: str) -> str:
     return doc.strip()
 
 
-def _apply_edits(bullets: list[str], edits: Sequence[Edit]) -> list[str]:
+def _apply_edits(bullets: list[str], edits: Sequence[Edit], surface: Surface) -> list[str]:
     out = list(bullets)
     for edit in edits:
-        if edit.surface is not Surface.MEMORY:
+        if edit.surface is not surface:
             continue
         if edit.op is EditOp.ADD:
             new = _as_bullet(edit.target)
@@ -62,14 +65,13 @@ def _apply_edits(bullets: list[str], edits: Sequence[Edit]) -> list[str]:
     return out
 
 
-class MemoryTextState:
-    """A ``TextState`` over a single memory markdown file."""
+class BlockTextState:
+    """A ``TextState`` over a single markdown file, scoped to one ``Surface``."""
 
-    surface = Surface.MEMORY
-
-    def __init__(self, path: Path) -> None:
+    def __init__(self, path: Path, surface: Surface) -> None:
         self._path = path
         self.name = path.name
+        self.surface = surface
 
     @property
     def path(self) -> Path:
@@ -83,7 +85,22 @@ class MemoryTextState:
 
     def render(self, edits: Sequence[Edit]) -> str:
         doc = self.read()
-        bullets = _apply_edits(_extract_bullets(doc), edits)
+        bullets = _apply_edits(_extract_bullets(doc), edits, self.surface)
         block = START + "\n" + "\n".join(bullets) + "\n" + END
         outside = _strip_block(doc)
         return f"{outside}\n\n{block}\n" if outside else f"{block}\n"
+
+
+class MemoryTextState(BlockTextState):
+    def __init__(self, path: Path) -> None:
+        super().__init__(path, Surface.MEMORY)
+
+
+class SkillTextState(BlockTextState):
+    def __init__(self, path: Path) -> None:
+        super().__init__(path, Surface.SKILL)
+
+
+class ClaudeMdTextState(BlockTextState):
+    def __init__(self, path: Path) -> None:
+        super().__init__(path, Surface.CLAUDE_MD)

@@ -22,8 +22,21 @@ from .harvest import JsonlTranscriptHarvester
 from .mine import CompositeMiner, CorrectionMiner, HeuristicMiner
 from .ports import RecurrenceMiner
 from .recursion import ReflectionInProgress, ReflectionLock
-from .store import FileAdopter, FileProposalStore, MemoryTextState
+from .store import (
+    BlockTextState,
+    ClaudeMdTextState,
+    FileAdopter,
+    FileProposalStore,
+    MemoryTextState,
+    SkillTextState,
+)
 from .worker import ClaudeCliWorker, WorkerError
+
+_SURFACES: dict[str, Surface] = {
+    "memory": Surface.MEMORY,
+    "skill": Surface.SKILL,
+    "claude_md": Surface.CLAUDE_MD,
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,10 +55,17 @@ class Settings:
     ignore_patterns: tuple[str, ...] = ()
     mine_corrections: bool = True
     max_corrections: int = 20
+    surface: Surface = Surface.MEMORY
 
 
-def _default_target() -> Path:
-    encoded = str(Path.cwd()).replace("/", "-")
+def _default_target(surface: Surface) -> Path:
+    cwd = Path.cwd()
+    if surface is Surface.CLAUDE_MD:
+        return cwd / "CLAUDE.md"
+    if surface is Surface.SKILL:
+        # No universal default for skills — set JANUS_TARGET to the SKILL.md.
+        return cwd / ".claude" / "skills" / "SKILL.md"
+    encoded = str(cwd).replace("/", "-")
     return Path.home() / ".claude" / "projects" / encoded / "memory" / "MEMORY.md"
 
 
@@ -73,8 +93,9 @@ def _env_bool(name: str, default: bool) -> bool:
 def load_settings() -> Settings:
     home = Path(os.environ.get("JANUS_HOME", str(Path.home() / ".janus")))
     projects = Path(os.environ.get("JANUS_PROJECTS_DIR", str(Path.home() / ".claude" / "projects")))
+    surface = _SURFACES.get(os.environ.get("JANUS_SURFACE", "memory").lower(), Surface.MEMORY)
     raw_target = os.environ.get("JANUS_TARGET")
-    target = Path(raw_target) if raw_target else _default_target()
+    target = Path(raw_target) if raw_target else _default_target(surface)
     # User-declared noise to ignore (one pattern per line) — e.g. a personal
     # automation's prompt. Keeps user-specific filtering out of the shared tool.
     ignore = tuple(
@@ -84,6 +105,7 @@ def load_settings() -> Settings:
         home=home,
         projects_dir=projects,
         target_path=target,
+        surface=surface,
         optimizer_model=os.environ.get("JANUS_OPTIMIZER_MODEL", "sonnet"),
         target_model=os.environ.get("JANUS_TARGET_MODEL", "haiku"),
         claude_path=os.environ.get("JANUS_CLAUDE_PATH", "claude"),
@@ -108,6 +130,14 @@ def _build_miner(settings: Settings) -> RecurrenceMiner:
     return CompositeMiner(heuristic, CorrectionMiner(classifier, settings.max_corrections))
 
 
+def _text_state(settings: Settings) -> BlockTextState:
+    if settings.surface is Surface.SKILL:
+        return SkillTextState(settings.target_path)
+    if settings.surface is Surface.CLAUDE_MD:
+        return ClaudeMdTextState(settings.target_path)
+    return MemoryTextState(settings.target_path)
+
+
 def build_cycle(settings: Settings) -> Cycle:
     clock = SystemClock()
     return Cycle(
@@ -121,10 +151,10 @@ def build_cycle(settings: Settings) -> Cycle:
         optimizer=ClaudeCliWorker(
             role="optimizer",
             model=settings.optimizer_model,
-            surface=Surface.MEMORY,
+            surface=settings.surface,
             claude_path=settings.claude_path,
         ),
-        state=MemoryTextState(settings.target_path),
+        state=_text_state(settings),
         store=FileProposalStore(settings.home, clock),
         clock=clock,
         lock=ReflectionLock(settings.home / "reflecting.lock"),
@@ -174,7 +204,7 @@ def _dispatch(action: str) -> int:
         return 0
 
     if action in ("dry-run", "run"):
-        print(f"janus {action}: optimizing {settings.target_path}")
+        print(f"janus {action}: optimizing {settings.surface.value} @ {settings.target_path}")
         report = build_cycle(settings).run(_cycle_config(settings), stage=(action == "run"))
         _print_report(report)
         return 0

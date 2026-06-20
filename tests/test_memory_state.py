@@ -3,7 +3,13 @@ from __future__ import annotations
 from pathlib import Path
 
 from janus.domain.types import Edit, EditOp, Surface
-from janus.store.memory_state import END, START, MemoryTextState
+from janus.store.memory_state import (
+    END,
+    START,
+    ClaudeMdTextState,
+    MemoryTextState,
+    SkillTextState,
+)
 
 
 def _edit(op: EditOp, target: str, replacement: str | None = None) -> Edit:
@@ -47,3 +53,25 @@ def test_content_surrounding_an_existing_block_survives(tmp_path: Path) -> None:
     assert "top matter" in out
     assert "bottom matter" in out
     assert "- fresh" in out
+
+
+def test_skill_state_applies_only_matching_surface_edits(tmp_path: Path) -> None:
+    path = tmp_path / "SKILL.md"
+    path.write_text("", encoding="utf-8")
+    state = SkillTextState(path)
+    assert state.surface is Surface.SKILL
+    out = state.render(
+        [
+            Edit(EditOp.ADD, Surface.SKILL, "skill rule"),
+            Edit(EditOp.ADD, Surface.MEMORY, "memory rule"),  # wrong surface, ignored
+        ]
+    )
+    assert "- skill rule" in out
+    assert "memory rule" not in out
+
+
+def test_claude_md_state_surface(tmp_path: Path) -> None:
+    state = ClaudeMdTextState(tmp_path / "CLAUDE.md")
+    assert state.surface is Surface.CLAUDE_MD
+    out = state.render([Edit(EditOp.ADD, Surface.CLAUDE_MD, "project rule")])
+    assert "- project rule" in out
