@@ -81,6 +81,42 @@ def test_harvest_skips_harness_wrappers_for_intent(tmp_path: Path) -> None:
     assert JsonlTranscriptHarvester(tmp_path / "projects").harvest()[0].intent == "the real ask"
 
 
+def test_harvest_filters_command_and_continuation_noise(tmp_path: Path) -> None:
+    # Surfaced by the first real harvest payload: these are harness-injected,
+    # not user intent, and must not be mined as recurring tasks.
+    proj = tmp_path / "projects" / "p"
+    proj.mkdir(parents=True)
+    _write(
+        proj / "s.jsonl",
+        [
+            {
+                "sessionId": "s",
+                "cwd": "/a/b",
+                "message": {
+                    "role": "user",
+                    "content": "<local-command-caveat>x</local-command-caveat>",
+                },
+            },
+            {
+                "sessionId": "s",
+                "message": {
+                    "role": "user",
+                    "content": "This session is being continued from a previous conversation.",
+                },
+            },
+            {
+                "sessionId": "s",
+                "message": {"role": "user", "content": "Continue from where you left off."},
+            },
+            {"sessionId": "s", "message": {"role": "user", "content": "optimize the retry logic"}},
+        ],
+    )
+    assert (
+        JsonlTranscriptHarvester(tmp_path / "projects").harvest()[0].intent
+        == "optimize the retry logic"
+    )
+
+
 def test_corrupt_lines_are_tolerated(tmp_path: Path) -> None:
     proj = tmp_path / "projects" / "p"
     proj.mkdir(parents=True)
