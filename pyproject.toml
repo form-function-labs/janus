@@ -1,0 +1,51 @@
+[project]
+name = "janus"
+version = "0.1.0"
+description = "Two-faced REM-sleep optimizer for Claude Code: gated, validated, staged self-improvement over memory, skills, and CLAUDE.md — without touching model weights."
+requires-python = ">=3.12"
+license = { text = "MIT" }
+authors = [{ name = "Mythwave" }]
+readme = "README.md"
+keywords = ["claude-code", "agent", "self-improvement", "skills", "memory"]
+dependencies = [
+  # Single runtime dependency, and a deliberate one. beartype gives O(1)
+  # runtime type-checking at the UNTRUSTED boundaries (transcript parse,
+  # claude -p output parse) where mypy is blind — "validate at boundaries"
+  # made executable. Pure-Python, zero transitive deps.
+  "beartype>=0.19",
+]
+
+[project.scripts]
+janus = "janus.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/janus"]
+
+[dependency-groups]
+dev = ["pytest>=8", "mypy>=1.11", "ruff>=0.6"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_unreachable = true
+files = ["src", "tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = "-q"
+markers = [
+  "live: end-to-end tests that call a real model via claude -p (needs ANTHROPIC_API_KEY)",
+]

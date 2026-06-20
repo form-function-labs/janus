@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# Virtualenv / uv
+.venv/
+
+# Tooling caches
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+
+# Janus machine-local runtime state (staging, backups, locks).
+# The portable, versioned text-state lives in git on purpose; this is the
+# per-machine scratch that must NOT travel.
+.janus/
+
+# Claude Code machine-local settings
+.claude/settings.local.json
+
+# Stray session/tool logs (not part of the package)
+logs/
+
+# OS
+.DS_Store

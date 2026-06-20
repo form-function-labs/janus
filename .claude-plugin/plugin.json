@@ -1,0 +1,8 @@
+{
+  "name": "janus",
+  "description": "Two-faced REM-sleep optimizer for Claude Code: gated, validated, staged self-improvement over memory, skills, and CLAUDE.md — without touching model weights.",
+  "version": "0.1.0",
+  "author": { "name": "Mythwave" },
+  "license": "MIT",
+  "keywords": ["self-improvement", "memory", "skills", "agent", "rem-sleep"]
+}

@@ -1,0 +1,15 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "mythwave",
+  "description": "Mythwave's Claude Code plugins.",
+  "owner": { "name": "Mythwave" },
+  "plugins": [
+    {
+      "name": "janus",
+      "description": "Two-faced REM-sleep optimizer: gated, validated, staged self-improvement over memory, skills, and CLAUDE.md.",
+      "author": { "name": "Mythwave" },
+      "source": "./",
+      "category": "development"
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "description": "Janus SessionEnd capture — cheaply queues review-worthy finished sessions. No model call.",
+  "hooks": {
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/session_end_capture.py\"",
+            "async": true
+          }
+        ]
+      }
+    ]
+  }
+}

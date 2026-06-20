@@ -1,0 +1,114 @@
+"""Streaming JSONL transcript harvester.
+
+Reads ``~/.claude/projects/<encoded-cwd>/<session>.jsonl`` one line at a time —
+single pass, O(1) memory, corrupt-line-tolerant — and emits cheap
+``SessionDigest`` value objects. ``beartype`` guards the boundary so the typed
+contract holds even though the input is untrusted JSON whose schema can drift.
+"""
+
+from __future__ import annotations
+
+import json
+from collections.abc import Iterator, Sequence
+from pathlib import Path
+
+from beartype import beartype
+
+from ..domain.types import SessionDigest
+
+
+def _as_str(value: object) -> str:
+    return value if isinstance(value, str) else ""
+
+
+def _first_user_text(content: object) -> str:
+    """Extract the user's task text from either string or list-of-blocks content.
+
+    Handling both shapes is the landmine the reference extractor tripped on:
+    list-format user text was silently dropped, losing the exact intent signal.
+    """
+    if isinstance(content, str):
+        text = content.strip()
+    elif isinstance(content, list):
+        parts: list[str] = []
+        for block in content:
+            if isinstance(block, dict) and block.get("type") == "text":
+                piece = block.get("text")
+                if isinstance(piece, str):
+                    parts.append(piece)
+        text = " ".join(parts).strip()
+    else:
+        return ""
+    # Skip harness-injected wrappers — they aren't the user's intent.
+    if text.startswith("<system-reminder>") or text.startswith("<command-"):
+        return ""
+    return text[:200]
+
+
+class JsonlTranscriptHarvester:
+    """Harvests finished Claude Code transcripts into ``SessionDigest`` summaries."""
+
+    def __init__(self, projects_dir: Path | None = None) -> None:
+        self._root = projects_dir or (Path.home() / ".claude" / "projects")
+
+    @beartype
+    def harvest(self, since: float | None = None) -> Sequence[SessionDigest]:
+        digests: list[SessionDigest] = []
+        if not self._root.is_dir():
+            return digests
+        for transcript in sorted(self._root.glob("*/*.jsonl")):
+            try:
+                if since is not None and transcript.stat().st_mtime < since:
+                    continue
+            except OSError:
+                continue
+            digest = self._digest(transcript)
+            if digest is not None:
+                digests.append(digest)
+        return digests
+
+    def _digest(self, transcript: Path) -> SessionDigest | None:
+        session_id = ""
+        cwd = ""
+        intent = ""
+        tool_calls = 0
+        saw_record = False
+        for rec in self._stream(transcript):
+            saw_record = True
+            if not session_id:
+                session_id = _as_str(rec.get("sessionId"))
+            if not cwd:
+                cwd = _as_str(rec.get("cwd"))
+            msg = rec.get("message")
+            if not isinstance(msg, dict):
+                continue
+            content = msg.get("content")
+            if msg.get("role") == "user" and not intent:
+                intent = _first_user_text(content)
+            if isinstance(content, list):
+                for block in content:
+                    if isinstance(block, dict) and block.get("type") == "tool_use":
+                        tool_calls += 1
+        if not saw_record:
+            return None
+        if not session_id:
+            session_id = transcript.stem
+        project = Path(cwd).name if cwd else transcript.parent.name
+        return SessionDigest(session_id, project, cwd, intent, tool_calls, str(transcript))
+
+    @staticmethod
+    def _stream(transcript: Path) -> Iterator[dict[str, object]]:
+        try:
+            with transcript.open(encoding="utf-8", errors="replace") as fh:
+                for raw in fh:
+                    line = raw.strip()
+                    if not line:
+                        continue
+                    try:
+                        rec = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    if isinstance(rec, dict):
+                        yield rec
+        except OSError:
+            return
