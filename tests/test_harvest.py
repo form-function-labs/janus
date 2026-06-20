@@ -139,6 +139,33 @@ def test_harvest_respects_user_ignore_patterns(tmp_path: Path) -> None:
     assert harvester.harvest()[0].intent == "the actual task"
 
 
+def test_harvest_extracts_correction_candidates(tmp_path: Path) -> None:
+    # A user redirect after an assistant turn is captured as (request, correction).
+    proj = tmp_path / "projects" / "p"
+    proj.mkdir(parents=True)
+    _write(
+        proj / "s.jsonl",
+        [
+            {
+                "sessionId": "s",
+                "cwd": "/a/b",
+                "message": {"role": "user", "content": "implement auth"},
+            },
+            {
+                "message": {
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": "using sessions"}],
+                }
+            },
+            {"sessionId": "s", "message": {"role": "user", "content": "no, use JWT not sessions"}},
+        ],
+    )
+    digest = JsonlTranscriptHarvester(tmp_path / "projects").harvest()[0]
+    assert len(digest.corrections) == 1
+    assert digest.corrections[0].request == "implement auth"
+    assert "JWT" in digest.corrections[0].correction
+
+
 def test_corrupt_lines_are_tolerated(tmp_path: Path) -> None:
     proj = tmp_path / "projects" / "p"
     proj.mkdir(parents=True)

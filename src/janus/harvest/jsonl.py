@@ -2,19 +2,21 @@
 
 Reads ``~/.claude/projects/<encoded-cwd>/<session>.jsonl`` one line at a time —
 single pass, O(1) memory, corrupt-line-tolerant — and emits cheap
-``SessionDigest`` value objects. ``beartype`` guards the boundary so the typed
-contract holds even though the input is untrusted JSON whose schema can drift.
+``SessionDigest`` value objects (recurring-task intent + correction pairs).
+``beartype`` guards the boundary so the typed contract holds even though the
+input is untrusted JSON whose schema can drift.
 """
 
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Iterator, Sequence
 from pathlib import Path
 
 from beartype import beartype
 
-from ..domain.types import SessionDigest
+from ..domain.types import Correction, SessionDigest
 
 
 def _as_str(value: object) -> str:
@@ -36,12 +38,26 @@ _NOISE_SUBSTRINGS = (
     "Continue from where you left off",
 )
 
+# A correction is the user redirecting the agent — detected at the START of the
+# message (corrections lead with the redirect), after an assistant turn.
+_CORRECTION_SIGNALS = re.compile(
+    r"\b("
+    r"no|nope|not that|that'?s not|thats not|that'?s wrong|wrong|incorrect|"
+    r"instead|actually|i (?:already )?said|i meant|stop|undo|revert|don'?t|do not"
+    r")\b",
+    re.I,
+)
+
 
 def _is_harness_noise(text: str) -> bool:
     stripped = text.lstrip()
     if any(stripped.startswith(prefix) for prefix in _NOISE_PREFIXES):
         return True
     return any(marker in text for marker in _NOISE_SUBSTRINGS)
+
+
+def _is_correction(text: str) -> bool:
+    return bool(_CORRECTION_SIGNALS.search(text[:120]))
 
 
 def _first_user_text(content: object) -> str:
@@ -106,6 +122,9 @@ class JsonlTranscriptHarvester:
         intent = ""
         tool_calls = 0
         saw_record = False
+        prev_role = ""
+        last_request = ""
+        corrections: list[Correction] = []
         for rec in self._stream(transcript):
             saw_record = True
             if not session_id:
@@ -116,20 +135,30 @@ class JsonlTranscriptHarvester:
             if not isinstance(msg, dict):
                 continue
             content = msg.get("content")
-            if msg.get("role") == "user" and not intent:
-                candidate = _first_user_text(content)
-                if candidate and not self._is_ignored(candidate):
-                    intent = candidate
+            role = msg.get("role")
+            if role == "user":
+                text = _first_user_text(content)
+                if text and not self._is_ignored(text):
+                    if prev_role == "assistant" and _is_correction(text):
+                        corrections.append(Correction(last_request or intent, text))
+                    else:
+                        last_request = text
+                        if not intent:
+                            intent = text
             if isinstance(content, list):
                 for block in content:
                     if isinstance(block, dict) and block.get("type") == "tool_use":
                         tool_calls += 1
+            if role in ("user", "assistant"):
+                prev_role = role
         if not saw_record:
             return None
         if not session_id:
             session_id = transcript.stem
         project = Path(cwd).name if cwd else transcript.parent.name
-        return SessionDigest(session_id, project, cwd, intent, tool_calls, str(transcript))
+        return SessionDigest(
+            session_id, project, cwd, intent, tool_calls, str(transcript), tuple(corrections)
+        )
 
     @staticmethod
     def _stream(transcript: Path) -> Iterator[dict[str, object]]:

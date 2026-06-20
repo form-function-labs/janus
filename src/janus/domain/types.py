@@ -62,13 +62,28 @@ PASS_THRESHOLD = 0.5
 
 @dataclass(frozen=True, slots=True)
 class RealTask:
-    """A recurring task mined from the user's own transcripts."""
+    """A task mined from the user's own transcripts.
+
+    Either a recurring intent (``rubric`` empty, judged generically) or a
+    correction-derived task whose ``rubric`` is the gradeable criterion the
+    output must satisfy to honour the correction.
+    """
 
     id: str
     intent: str
     project: str
     source_sessions: tuple[str, ...]
     split: Split
+    rubric: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class CorrectionVerdict:
+    """A classifier's judgment on a candidate correction."""
+
+    is_correction: bool
+    rubric: str = ""  # one-line testable criterion the output must satisfy
+    lesson: str = ""  # one-line durable rule worth remembering
 
 
 @dataclass(frozen=True, slots=True)
@@ -129,11 +144,25 @@ class PairedOutcome:
 
 
 @dataclass(frozen=True, slots=True)
+class Correction:
+    """A point where the user corrected or redirected the agent.
+
+    The richest memory signal. ``request`` is the task that led to the corrected
+    behaviour; ``correction`` is what the user said to fix it — which doubles as
+    a gradeable rubric ("does the output now satisfy this?"). One correction is
+    worth more than ten benign recurrences.
+    """
+
+    request: str
+    correction: str
+
+
+@dataclass(frozen=True, slots=True)
 class SessionDigest:
     """A cheap, structured summary of one finished session — no transcript body.
 
-    This is what the harvester emits: enough to mine recurring tasks from,
-    without re-ingesting the (possibly huge) transcript into context.
+    This is what the harvester emits: enough to mine recurring tasks *and*
+    corrections from, without re-ingesting the (possibly huge) transcript.
     """
 
     session_id: str
@@ -142,3 +171,4 @@ class SessionDigest:
     intent: str  # the task the session was about (typically the first user ask)
     tool_calls: int
     transcript_path: str
+    corrections: tuple[Correction, ...] = ()
