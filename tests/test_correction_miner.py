@@ -35,6 +35,14 @@ def test_promotes_confirmed_rejects_unconfirmed() -> None:
     assert task.rubric.startswith("must:")
 
 
+def test_threads_distilled_lesson_onto_task() -> None:
+    """The lesson the classifier distils must survive onto the RealTask so the
+    optimizer can encode it directly (regression guard for the dropped-lesson bug)."""
+    digests = [_digest("s1", (Correction("implement auth", "no, use JWT not sessions"),))]
+    task = next(iter(CorrectionMiner(StubClassifier()).mine(digests)))
+    assert task.lesson == "use JWT"
+
+
 def test_budget_caps_classifier_calls() -> None:
     many = tuple(Correction(f"req {i}", "use JWT") for i in range(10))
     tasks = list(CorrectionMiner(StubClassifier(), max_candidates=3).mine([_digest("s1", many)]))

@@ -44,6 +44,7 @@ _ISOLATION_FLAGS: tuple[str, ...] = (
 
 _NUMBER = re.compile(r"[-+]?\d*\.?\d+")
 _FENCE = re.compile(r"```(?:json)?", re.I)
+_WS = re.compile(r"\s+")  # collapse whitespace/newlines in evidence so it stays single-line
 
 
 class WorkerError(RuntimeError):
@@ -74,9 +75,19 @@ class ClaudeCliWorker:
     def run(self, task: Task, context: str) -> RolloutResult:
         output = self._call(_run_prompt(task.intent, context))
         rubric = task.rubric if isinstance(task, RealTask) else ""
+        lesson = task.lesson if isinstance(task, RealTask) else ""
         score = self._judge(task.intent, output, rubric)
         # Memory-surface tasks run text-only (tools disallowed), so no tool use.
-        return RolloutResult(task.id, score, tool_invoked=False, transcript=output)
+        # Carry the correction's distilled lesson + rubric so the optimizer can
+        # encode them directly instead of reverse-engineering from the transcript.
+        return RolloutResult(
+            task.id,
+            score,
+            tool_invoked=False,
+            transcript=output,
+            lesson=lesson,
+            rubric=rubric,
+        )
 
     def _judge(self, intent: str, output: str, rubric: str = "") -> Score:
         verdict = self._call(_judge_prompt(intent, output, rubric))
@@ -163,11 +174,26 @@ def _classify_prompt(request: str, correction: str) -> str:
 
 
 _EDIT_SCHEMA = (
-    "Respond with ONLY a JSON array of bounded edits, each like "
-    '{"op": "add"|"delete"|"replace", "target": "<bullet text>", '
-    '"replacement": "<text or null>", "rationale": "<why>"}. '
-    "At most 3 edits. Keep them minimal."
+    "Respond with ONLY a JSON array of edits, each like "
+    '{"op": "add"|"delete"|"replace", "target": "<text>", '
+    '"replacement": "<text or null>", "rationale": "<why>"}.\n'
+    "Rules for each op:\n"
+    '- "add": "target" is a SINGLE new rule (one sentence, no leading "- ", no '
+    "newlines). It will be appended as one bullet inside the LEARNED block.\n"
+    '- "delete": "target" must be the EXACT text of an existing LEARNED bullet '
+    "(quoted verbatim from the DOCUMENT below).\n"
+    '- "replace": "target" is an existing LEARNED bullet quoted verbatim; '
+    '"replacement" is its single-rule rewrite.\n'
+    "At most 3 edits. Each edit operates ONLY on the LEARNED block of the "
+    "DOCUMENT. NEVER use text from the EVIDENCE as a target — the evidence is "
+    "read-only context, not part of the document you are editing."
 )
+
+
+def _evidence_line(prefix: str, text: str, limit: int) -> str:
+    """One evidence row. Deliberately NOT a markdown bullet so the model cannot
+    mistake it for an editable DOCUMENT bullet (the root cause of garbage edits)."""
+    return f"  [{prefix}] {_WS.sub(' ', text.strip())[:limit]}"
 
 
 def _reflect_prompt(
@@ -178,14 +204,41 @@ def _reflect_prompt(
     *,
     strict: bool = False,
 ) -> str:
-    fail_block = "\n".join(f"- FAILED: {r.transcript[:300]}" for r in failures[:5]) or "(none)"
-    succ_block = "\n".join(f"- OK: {r.transcript[:120]}" for r in successes[:3]) or "(none)"
+    # Distilled lessons from confirmed corrections are the PRIMARY signal: encode
+    # them as general rules. Fall back to transcript evidence when absent.
+    lessons = []
+    seen: set[str] = set()
+    for r in failures:
+        lesson = r.lesson.strip()
+        if lesson and lesson.lower() not in seen:
+            seen.add(lesson.lower())
+            lessons.append(lesson)
+    lesson_block = (
+        "\n".join(_evidence_line("LESSON", line, 200) for line in lessons[:5])
+        or "  (none — infer rules from the failing rollouts below)"
+    )
+    fail_block = (
+        "\n".join(_evidence_line("FAILED-ROLLOUT", r.transcript, 280) for r in failures[:5])
+        or "  (none)"
+    )
+    succ_block = (
+        "\n".join(_evidence_line("PASSING-ROLLOUT", r.transcript, 160) for r in successes[:3])
+        or "  (none)"
+    )
     firm = "\nOutput JSON only. No prose, no code fences." if strict else ""
     return (
-        f"You are improving a {surface.value} document for a coding agent.\n"
-        f"Current document:\n---\n{state_text[:4000]}\n---\n"
-        f"Recent failures:\n{fail_block}\n"
-        f"Recent successes (preserve what works):\n{succ_block}\n"
+        f"You maintain the LEARNED block of a {surface.value} document for a coding "
+        "agent. Your job: propose general, durable rules that would prevent the "
+        "failures below — derived from the LESSONS — and add them to the LEARNED "
+        "block.\n\n"
+        "=== DOCUMENT (the ONLY text you may edit; only its LEARNED block is "
+        f"editable) ===\n{state_text[:4000]}\n=== END DOCUMENT ===\n\n"
+        "=== EVIDENCE (READ-ONLY — never edit, quote, or target this text) ===\n"
+        f"Lessons distilled from the user's corrections (turn each into a rule):\n"
+        f"{lesson_block}\n"
+        f"Failing rollouts (what went wrong):\n{fail_block}\n"
+        f"Passing rollouts (do not regress these):\n{succ_block}\n"
+        "=== END EVIDENCE ===\n\n"
         f"{_EDIT_SCHEMA}{firm}"
     )
 
@@ -232,6 +285,20 @@ def _parse_verdict(text: str) -> CorrectionVerdict:
     )
 
 
+def _one_rule(text: str) -> str:
+    """Collapse a model-supplied rule to a single clean bullet line.
+
+    Defense-in-depth at the adapter boundary: even if the model crams several
+    newline-joined sub-bullets into one field, we keep only the first rule and
+    strip any leading ``- `` so it lands as exactly one well-formed bullet.
+    """
+    first = next((ln for ln in text.splitlines() if ln.strip()), "")
+    first = first.strip()
+    if first.startswith("- "):
+        first = first[2:].strip()
+    return _WS.sub(" ", first)
+
+
 def _parse_edits(text: str, surface: Surface) -> tuple[Edit, ...]:
     obj = _extract_json(text)
     if isinstance(obj, dict):
@@ -253,13 +320,20 @@ def _parse_edits(text: str, surface: Surface) -> tuple[Edit, ...]:
         replacement = replacement if isinstance(replacement, str) else None
         if op is EditOp.REPLACE and replacement is None:
             continue
+        # ADD targets and any replacement must be a single clean rule, never a
+        # multi-line dump. DELETE/REPLACE targets stay verbatim so they can match
+        # an existing bullet (which is already a single normalized line).
+        clean_target = _one_rule(target) if op is EditOp.ADD else target.strip()
+        if not clean_target:
+            continue
+        clean_replacement = _one_rule(replacement) if replacement is not None else None
         rationale = item.get("rationale")
         edits.append(
             Edit(
                 op,
                 surface,
-                target.strip(),
-                replacement,
+                clean_target,
+                clean_replacement,
                 rationale if isinstance(rationale, str) else "",
             )
         )

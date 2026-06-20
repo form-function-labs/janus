@@ -50,6 +50,7 @@ class CorrectionMiner:
                         (digest.session_id,),
                         Split.TRAIN,
                         rubric=verdict.rubric,
+                        lesson=verdict.lesson,
                     )
                 )
         return tasks

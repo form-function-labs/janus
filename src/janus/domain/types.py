@@ -74,7 +74,8 @@ class RealTask:
     project: str
     source_sessions: tuple[str, ...]
     split: Split
-    rubric: str = ""
+    rubric: str = ""  # gradeable criterion the output must satisfy (judge sees this)
+    lesson: str = ""  # distilled durable rule the optimizer should encode as a memory bullet
 
 
 @dataclass(frozen=True, slots=True)
@@ -128,6 +129,8 @@ class RolloutResult:
     score: Score
     tool_invoked: bool = False  # observed from the worker, not self-reported
     transcript: str = ""
+    lesson: str = ""  # distilled rule from the task's correction, carried for the optimizer
+    rubric: str = ""  # the gradeable criterion this rollout was judged against
 
 
 @dataclass(frozen=True, slots=True)
