@@ -21,9 +21,9 @@ def _as_str(value: object) -> str:
     return value if isinstance(value, str) else ""
 
 
-# Harness-injected text that is NOT a user's actual intent. Filtered so the
-# miner doesn't promote slash-command wrappers and continuation preambles to
-# "recurring tasks" — surfaced directly by the first real harvest payload.
+# Generic harness-injected text that is NEVER a user's intent — filtered for
+# every user. (User-specific noise, e.g. an automation's prompt, is configured
+# separately via the harvester's ignore_patterns.)
 _NOISE_PREFIXES = (
     "<system-reminder>",
     "<command-",
@@ -70,8 +70,19 @@ def _first_user_text(content: object) -> str:
 class JsonlTranscriptHarvester:
     """Harvests finished Claude Code transcripts into ``SessionDigest`` summaries."""
 
-    def __init__(self, projects_dir: Path | None = None) -> None:
+    def __init__(
+        self,
+        projects_dir: Path | None = None,
+        ignore_patterns: Sequence[str] = (),
+    ) -> None:
         self._root = projects_dir or (Path.home() / ".claude" / "projects")
+        # User-configured noise (e.g. an automation's prompt). Case-insensitive
+        # substring match — generic harness noise is handled above, for everyone.
+        self._ignore = tuple(p.lower() for p in ignore_patterns if p.strip())
+
+    def _is_ignored(self, text: str) -> bool:
+        low = text.lower()
+        return any(pattern in low for pattern in self._ignore)
 
     @beartype
     def harvest(self, since: float | None = None) -> Sequence[SessionDigest]:
@@ -106,7 +117,9 @@ class JsonlTranscriptHarvester:
                 continue
             content = msg.get("content")
             if msg.get("role") == "user" and not intent:
-                intent = _first_user_text(content)
+                candidate = _first_user_text(content)
+                if candidate and not self._is_ignored(candidate):
+                    intent = candidate
             if isinstance(content, list):
                 for block in content:
                     if isinstance(block, dict) and block.get("type") == "tool_use":

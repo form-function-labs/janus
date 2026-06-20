@@ -19,7 +19,7 @@ from pathlib import Path
 from .domain.gate import GatePolicy, gate
 from .domain.proposal import Proposal
 from .domain.split import SplitConfig, assign_splits
-from .domain.types import PairedOutcome, Split
+from .domain.types import Edit, PairedOutcome, Split
 from .ports import (
     Clock,
     OptimizerWorker,
@@ -55,6 +55,7 @@ class SleepReport:
     regressions: int = 0
     staging_dir: str = ""
     message: str = ""
+    edits: tuple[Edit, ...] = ()
 
 
 @dataclass
@@ -105,7 +106,7 @@ class Cycle:
                 len(val),
                 0,
                 "no-edits",
-                message="Optimizer proposed no edits.",
+                message="Optimizer proposed no edits (nothing to repair on these tasks).",
             )
 
         candidate = self.state.render(edits)
@@ -129,6 +130,7 @@ class Cycle:
                 effect.repairs,
                 effect.regressions,
                 message="Gate rejected: no net improvement on held-out tasks without regressions.",
+                edits=tuple(edits),
             )
 
         proposal = Proposal(
@@ -156,4 +158,5 @@ class Cycle:
             "Proposal staged — review it, then run `/janus adopt`."
             if stage
             else "Dry-run preview; nothing staged.",
+            edits=tuple(edits),
         )

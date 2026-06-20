@@ -117,6 +117,28 @@ def test_harvest_filters_command_and_continuation_noise(tmp_path: Path) -> None:
     )
 
 
+def test_harvest_respects_user_ignore_patterns(tmp_path: Path) -> None:
+    # User-declared noise (e.g. a personal automation's prompt) is skipped so the
+    # next real intent is mined instead — kept out of the shared tool.
+    proj = tmp_path / "projects" / "p"
+    proj.mkdir(parents=True)
+    _write(
+        proj / "s.jsonl",
+        [
+            {
+                "sessionId": "s",
+                "cwd": "/a/b",
+                "message": {"role": "user", "content": "Generate a conventional commit message"},
+            },
+            {"sessionId": "s", "message": {"role": "user", "content": "the actual task"}},
+        ],
+    )
+    harvester = JsonlTranscriptHarvester(
+        tmp_path / "projects", ignore_patterns=["conventional commit message"]
+    )
+    assert harvester.harvest()[0].intent == "the actual task"
+
+
 def test_corrupt_lines_are_tolerated(tmp_path: Path) -> None:
     proj = tmp_path / "projects" / "p"
     proj.mkdir(parents=True)

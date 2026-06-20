@@ -38,6 +38,7 @@ class Settings:
     seed: int
     min_net: int
     regression_budget: int
+    ignore_patterns: tuple[str, ...] = ()
 
 
 def _default_target() -> Path:
@@ -64,6 +65,11 @@ def load_settings() -> Settings:
     projects = Path(os.environ.get("JANUS_PROJECTS_DIR", str(Path.home() / ".claude" / "projects")))
     raw_target = os.environ.get("JANUS_TARGET")
     target = Path(raw_target) if raw_target else _default_target()
+    # User-declared noise to ignore (one pattern per line) — e.g. a personal
+    # automation's prompt. Keeps user-specific filtering out of the shared tool.
+    ignore = tuple(
+        line for line in os.environ.get("JANUS_IGNORE_PATTERNS", "").splitlines() if line.strip()
+    )
     return Settings(
         home=home,
         projects_dir=projects,
@@ -76,13 +82,14 @@ def load_settings() -> Settings:
         seed=_env_int("JANUS_SEED", 42),
         min_net=_env_int("JANUS_MIN_NET", 1),
         regression_budget=_env_int("JANUS_REGRESSION_BUDGET", 0),
+        ignore_patterns=ignore,
     )
 
 
 def build_cycle(settings: Settings) -> Cycle:
     clock = SystemClock()
     return Cycle(
-        harvester=JsonlTranscriptHarvester(settings.projects_dir),
+        harvester=JsonlTranscriptHarvester(settings.projects_dir, settings.ignore_patterns),
         miner=HeuristicMiner(settings.min_recurrence),
         target=ClaudeCliWorker(
             role="target", model=settings.target_model, claude_path=settings.claude_path
@@ -118,6 +125,10 @@ def _print_report(report: SleepReport) -> None:
             f"- regressions {report.regressions} = net {report.net}"
         )
     print(f"  decision           : {report.decision}")
+    for edit in report.edits:
+        print(f"    [{edit.op.value}] {edit.target[:80]}")
+        if edit.rationale:
+            print(f"       reason: {edit.rationale[:88]}")
     if report.staging_dir:
         print(f"  staged at          : {report.staging_dir}")
     print(f"  {report.message}")
@@ -127,7 +138,9 @@ def _dispatch(action: str) -> int:
     settings = load_settings()
 
     if action == "harvest":
-        digests = JsonlTranscriptHarvester(settings.projects_dir).harvest()
+        digests = JsonlTranscriptHarvester(
+            settings.projects_dir, settings.ignore_patterns
+        ).harvest()
         tasks = HeuristicMiner(settings.min_recurrence).mine(digests)
         print(f"harvested {len(digests)} session(s); {len(tasks)} recurring task(s):")
         for task in tasks:
