@@ -4,5 +4,7 @@
   "version": "0.1.0",
   "author": { "name": "Mythwave" },
   "license": "MIT",
-  "keywords": ["self-improvement", "memory", "skills", "agent", "rem-sleep"]
+  "keywords": ["self-improvement", "memory", "skills", "agent", "rem-sleep"],
+  "homepage": "https://github.com/form-function-labs/janus",
+  "repository": "https://github.com/form-function-labs/janus"
 }

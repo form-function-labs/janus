@@ -48,7 +48,7 @@ the run it produced.
 2. **held-out validation gate (`limen`)** — an edit is kept only if it strictly improves a score on tasks it did not train on, **and breaks nothing** (`repairs − regressions ≥ min_net`, hard regressions ≤ `regression_budget`).
 3. **staged, never auto-applied** — propose → you adopt, with backup + rollback. Synthetic ("dream") tasks are a typestate with no `split` field, so they *structurally cannot* enter the gate.
 
-## What's new since v0.1
+## Highlights
 
 - **Correction-driven optimization.** The harvester extracts candidate `(request, correction)`
   pairs with a cheap regex pre-filter (a redirect at the start of a user turn that follows an
@@ -86,7 +86,7 @@ src/janus/
   store/       BlockTextState (3 surfaces) · proposal staging · atomic adopter
   recursion.py anti-recursion lock (env fast-path + PID lockfile backstop)
   clock.py     SystemClock
-  cycle.py     orchestration   ·   cli.py  /janus entrypoint
+  cycle.py     orchestration   ·   cli.py  janus CLI entrypoint
 hooks/         session_end_capture.py  (cheap capture + archive; no model call)
 ```
 
@@ -96,10 +96,19 @@ One worker class (`ClaudeCliWorker`) plays three roles — **target** (`run` + i
 
 ## Install (Claude Code plugin)
 
+**Prerequisites:** [Claude Code](https://code.claude.com), [`uv`](https://docs.astral.sh/uv/) (`brew install uv`),
+and `ANTHROPIC_API_KEY` in your environment (only needed for `run`/`dry-run`, which call the model).
+
 ```
-/plugin marketplace add ~/CursorAI/janus      # or a git URL once published
+/plugin marketplace add form-function-labs/janus   # the GitHub repo is also the marketplace
 /plugin install janus@mythwave
+/reload-plugins
 ```
+
+The command is namespaced by plugin → invoke it as `/janus:janus` (see Usage). No `uv sync` step is
+needed — `uv run --project "${CLAUDE_PLUGIN_ROOT}"` builds the venv from the committed `uv.lock` on first call.
+
+For local development you can also add the marketplace from a local clone: `/plugin marketplace add /path/to/janus`.
 
 ## Usage
 
@@ -114,7 +123,8 @@ uv run janus adopt                      # apply the staged proposal (backup firs
 doppler run -- uv run janus harvest     # harvest + show recurring tasks and candidate corrections
 ```
 
-Inside Claude Code these are exposed as `/janus dry-run | run | status | adopt | harvest`.
+Inside Claude Code these are exposed as `/janus:janus dry-run | run | status | adopt | harvest`
+(the command is namespaced `<plugin>:<command>`).
 
 ## Configuration
 
@@ -175,7 +185,7 @@ All configuration is environment variables, so the plugin command stays declarat
 - The safety triad holds in practice: optimizer ≠ target, held-out gate, staged-not-applied.
 - The correction classifier is validated on real transcripts (~16 of 41 regex candidates confirmed as genuine lessons).
 - The optimizer's **reflect prompt is v2**: the editable `DOCUMENT` and the read-only `EVIDENCE` are now hard-fenced, and confirmed-correction *lessons* are threaded directly into the optimizer (via `RolloutResult.lesson`). On real transcripts this reliably yields clean, general, lesson-shaped rules — e.g. *"Always review the complete diff before approving or endorsing a decision"* — instead of the v1 garbage that targeted evidence fragments (proven: 0 malformed edits across repeated reflect trials).
-- **63 tests green** (`ruff` + `mypy --strict`). Repo: [github.com/Luiz-Frias/janus](https://github.com/Luiz-Frias/janus).
+- **66 tests green** (`ruff` + `mypy --strict`). Repo: [github.com/form-function-labs/janus](https://github.com/form-function-labs/janus).
 
 **Honest v1 limits** (the edit *quality* frontier is next, not the *plumbing*):
 

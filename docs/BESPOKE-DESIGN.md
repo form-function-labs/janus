@@ -91,7 +91,7 @@ Expensive reflection deferred to a gated worker run (cron or next-session trigge
 - **Repo name** (conventions: internal `Praxis`, public `Mythwave`; theme REM/sleep/dream)
 - **License** (ecosystem is MIT — SkillOpt/skill-forge/dorveille; vs source-available like
   doc-lora-training; user + counsel)
-- **Location** (recommend sibling `~/CursorAI/<name>/`)
+- **Location** (recommend a sibling project directory, e.g. `~/code/<name>/`)
 - **Worker isolation / auth**: `--bare` (SkillOpt, works on API-key) vs no-`--bare` +
   allowlist + env-sentinel (dorveille, required for subscription login). Hinges on user auth.
 - **First surface**: memory (recommended) vs skills

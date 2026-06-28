@@ -9,7 +9,11 @@
       "description": "Two-faced REM-sleep optimizer: gated, validated, staged self-improvement over memory, skills, and CLAUDE.md.",
       "author": { "name": "Mythwave" },
       "source": "./",
-      "category": "development"
+      "category": "development",
+      "license": "MIT",
+      "keywords": ["self-improvement", "memory", "skills", "agent", "rem-sleep"],
+      "homepage": "https://github.com/form-function-labs/janus",
+      "repository": "https://github.com/form-function-labs/janus"
     }
   ]
 }
