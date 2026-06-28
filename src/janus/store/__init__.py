@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from .adopter import FileAdopter
+from .ignore_store import IgnorePatternStore
 from .memory_state import BlockTextState, ClaudeMdTextState, MemoryTextState, SkillTextState
 from .proposal_store import FileProposalStore
 
@@ -11,6 +12,7 @@ __all__ = [
     "ClaudeMdTextState",
     "FileAdopter",
     "FileProposalStore",
+    "IgnorePatternStore",
     "MemoryTextState",
     "SkillTextState",
 ]

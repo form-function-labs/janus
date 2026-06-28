@@ -27,6 +27,7 @@ from .store import (
     ClaudeMdTextState,
     FileAdopter,
     FileProposalStore,
+    IgnorePatternStore,
     MemoryTextState,
     SkillTextState,
 )
@@ -99,9 +100,18 @@ def load_settings() -> Settings:
     target = Path(raw_target) if raw_target else _default_target(surface)
     # User-declared noise to ignore (one pattern per line) — e.g. a personal
     # automation's prompt. Keeps user-specific filtering out of the shared tool.
-    ignore = tuple(
+    # Sources: env-var (session override) unioned with the durable ignore store.
+    env_patterns = tuple(
         line for line in os.environ.get("JANUS_IGNORE_PATTERNS", "").splitlines() if line.strip()
     )
+    store_patterns = IgnorePatternStore(home).list()
+    seen: set[str] = set()
+    ignore_list: list[str] = []
+    for p in (*env_patterns, *store_patterns):
+        if p not in seen:
+            seen.add(p)
+            ignore_list.append(p)
+    ignore = tuple(ignore_list)
     return Settings(
         home=home,
         projects_dir=projects,
@@ -193,8 +203,37 @@ def _print_report(report: SleepReport) -> None:
     print(f"  {report.message}")
 
 
-def _dispatch(action: str) -> int:
+def _dispatch(action: str, sub_args: tuple[str, ...] = ()) -> int:
     settings = load_settings()
+
+    if action == "ignore":
+        store = IgnorePatternStore(settings.home)
+        subcmd = sub_args[0] if sub_args else ""
+        if subcmd == "list":
+            patterns = store.list()
+            if patterns:
+                for p in patterns:
+                    print(p)
+            else:
+                print("janus: no ignore patterns stored.")
+            return 0
+        if subcmd == "add":
+            if len(sub_args) < 2:
+                print("usage: janus ignore add <pattern>")
+                return 2
+            store.add(sub_args[1])
+            print(f"janus: added ignore pattern {sub_args[1]!r}")
+            return 0
+        if subcmd == "remove":
+            if len(sub_args) < 2:
+                print("usage: janus ignore remove <pattern>")
+                return 2
+            store.remove(sub_args[1])
+            print(f"janus: removed ignore pattern {sub_args[1]!r}")
+            return 0
+        print(f"janus: unknown ignore subcommand {subcmd!r}")
+        print("usage: janus ignore [list|add <pattern>|remove <pattern>]")
+        return 2
 
     if action == "harvest":
         digests = JsonlTranscriptHarvester(
@@ -251,7 +290,7 @@ def main(argv: list[str] | None = None) -> int:
     args = argv if argv is not None else sys.argv[1:]
     action = args[0] if args else "status"
     try:
-        return _dispatch(action)
+        return _dispatch(action, tuple(args[1:]))
     except ReflectionInProgress as exc:
         print(f"janus: a reflection cycle is already running ({exc}).")
         return 1
