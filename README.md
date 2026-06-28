@@ -128,8 +128,10 @@ Inside Claude Code these are exposed as `/janus:janus dry-run | run | status | a
 
 ## Configuration
 
-All configuration is environment variables, so the plugin command stays declarative. Read from
-`load_settings` (`cli.py`) and the capture hook.
+Configuration is environment variables (session-scoped), so the plugin command stays declarative.
+Read from `load_settings` (`cli.py`) and the capture hook. The one durable exception is the ignore
+store: `janus ignore add` persists patterns to `$JANUS_HOME/ignore-patterns` across sessions
+(see [Durable ignore patterns](#durable-ignore-patterns) below).
 
 ### Cycle & surface
 

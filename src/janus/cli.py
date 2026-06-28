@@ -221,7 +221,11 @@ def _dispatch(action: str, sub_args: tuple[str, ...] = ()) -> int:
             if len(sub_args) < 2:
                 print("usage: janus ignore add <pattern>")
                 return 2
-            store.add(sub_args[1])
+            try:
+                store.add(sub_args[1])
+            except ValueError as exc:
+                print(f"janus: invalid ignore pattern — {exc}")
+                return 2
             print(f"janus: added ignore pattern {sub_args[1]!r}")
             return 0
         if subcmd == "remove":
