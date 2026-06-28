@@ -19,7 +19,6 @@ from the worker adapter; tests supply a lambda or a named stub.
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 from unittest.mock import patch
 
@@ -201,67 +200,72 @@ def test_returns_three_checks_in_order(tmp_path: Path) -> None:
 
 
 def test_dispatch_doctor_all_pass_returns_zero(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """All checks passing → exit code 0, output contains ✓ markers."""
-    os.environ["JANUS_HOME"] = str(tmp_path / "home")
-    try:
-        with (
-            patch("shutil.which", return_value="/usr/local/bin/claude"),
-            patch("janus.cli.probe_auth", return_value=(True, "")),
-        ):
-            rc = _dispatch("doctor")
-        assert rc == 0
-        out = capsys.readouterr().out
-        assert "✓" in out
-    finally:
-        os.environ.pop("JANUS_HOME", None)
+    monkeypatch.setenv("JANUS_HOME", str(tmp_path / "home"))
+    with (
+        patch("shutil.which", return_value="/usr/local/bin/claude"),
+        patch("janus.cli.probe_auth", return_value=(True, "")),
+    ):
+        rc = _dispatch("doctor")
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "✓" in out
+    assert "✗" not in out  # nothing should fail when all three pass
 
 
 def test_dispatch_doctor_binary_missing_returns_nonzero(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Binary not on PATH → exit code non-zero, output contains ✗."""
-    os.environ["JANUS_HOME"] = str(tmp_path)
-    os.environ["JANUS_CLAUDE_PATH"] = "claude-not-found-xyz-abc"
-    try:
-        # probe_auth is still patched to avoid subprocess; binary check should fail first
-        with patch("janus.cli.probe_auth", return_value=(False, "binary missing")):
-            rc = _dispatch("doctor")
-        assert rc != 0
-        out = capsys.readouterr().out
-        assert "✗" in out
-    finally:
-        os.environ.pop("JANUS_HOME", None)
-        os.environ.pop("JANUS_CLAUDE_PATH", None)
+    """Binary not on PATH → non-zero, and ONLY the binary check fails.
+
+    probe_auth is stubbed to succeed and home is writable, so a failure must be
+    attributable specifically to the missing binary — not masked by another
+    failing check.
+    """
+    monkeypatch.setenv("JANUS_HOME", str(tmp_path))
+    monkeypatch.setenv("JANUS_CLAUDE_PATH", "claude-not-found-xyz-abc")
+    with patch("janus.cli.probe_auth", return_value=(True, "")):
+        rc = _dispatch("doctor")
+    assert rc != 0
+    out = capsys.readouterr().out
+    assert "✗ claude binary" in out  # the binary check is the one that failed
+    assert "✓ janus home writable" in out  # home + auth still passed
+    assert "✓ claude auth" in out
 
 
 def test_dispatch_doctor_probe_fail_returns_nonzero(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Auth probe failing → exit code non-zero even if binary and home pass."""
-    os.environ["JANUS_HOME"] = str(tmp_path / "home3")
-    try:
-        with (
-            patch("shutil.which", return_value="/usr/local/bin/claude"),
-            patch("janus.cli.probe_auth", return_value=(False, "not logged in")),
-        ):
-            rc = _dispatch("doctor")
-        assert rc != 0
-        out = capsys.readouterr().out
-        assert "✗" in out
-    finally:
-        os.environ.pop("JANUS_HOME", None)
+    monkeypatch.setenv("JANUS_HOME", str(tmp_path / "home3"))
+    with (
+        patch("shutil.which", return_value="/usr/local/bin/claude"),
+        patch("janus.cli.probe_auth", return_value=(False, "not logged in")),
+    ):
+        rc = _dispatch("doctor")
+    assert rc != 0
+    out = capsys.readouterr().out
+    assert "✗ claude auth" in out
 
 
 def test_dispatch_doctor_home_not_writable_returns_nonzero(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Home not writable → exit code non-zero."""
     locked = tmp_path / "locked2"
     locked.mkdir()
     locked.chmod(0o555)
-    os.environ["JANUS_HOME"] = str(locked)
+    monkeypatch.setenv("JANUS_HOME", str(locked))
     try:
         with (
             patch("shutil.which", return_value="/usr/local/bin/claude"),
@@ -271,4 +275,3 @@ def test_dispatch_doctor_home_not_writable_returns_nonzero(
         assert rc != 0
     finally:
         locked.chmod(0o755)
-        os.environ.pop("JANUS_HOME", None)

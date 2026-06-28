@@ -80,7 +80,14 @@ def probe_auth(claude_path: str) -> tuple[bool, str]:
     except (OSError, subprocess.TimeoutExpired) as exc:
         return False, str(exc)
     if proc.returncode != 0:
-        return False, proc.stderr.strip()[:200]
+        # Fall back to stdout, then the exit code, so doctor always has an
+        # actionable reason even when the CLI exits non-zero with empty stderr.
+        detail = (
+            proc.stderr.strip()
+            or proc.stdout.strip()
+            or f"claude exited with code {proc.returncode}"
+        )
+        return False, detail[:200]
     return True, ""
 
 
