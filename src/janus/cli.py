@@ -9,7 +9,9 @@ command can stay declarative.
 from __future__ import annotations
 
 import os
+import shutil
 import sys
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -31,7 +33,7 @@ from .store import (
     MemoryTextState,
     SkillTextState,
 )
-from .worker import ClaudeCliWorker, WorkerError
+from .worker import ClaudeCliWorker, WorkerError, probe_auth
 
 _SURFACES: dict[str, Surface] = {
     "memory": Surface.MEMORY,
@@ -58,6 +60,69 @@ class Settings:
     max_corrections: int = 20
     surface: Surface = Surface.MEMORY
     judge_model: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class DoctorCheck:
+    """Result of one doctor preflight check."""
+
+    label: str
+    ok: bool
+    hint: str  # fix suggestion shown only when ok=False
+
+
+def _doctor_checks(
+    settings: Settings,
+    probe_fn: Callable[[str], tuple[bool, str]],
+) -> list[DoctorCheck]:
+    """Run all three preflight checks without any real model call.
+
+    *probe_fn* is injected so unit tests can supply a fake; the real adapter is
+    :func:`~janus.worker.probe_auth`.  Returns exactly three checks in the order:
+    claude binary → janus home writable → claude auth.
+    """
+    checks: list[DoctorCheck] = []
+
+    # 1. Claude binary on PATH (or absolute path)
+    binary_ok = shutil.which(settings.claude_path) is not None
+    checks.append(
+        DoctorCheck(
+            label="claude binary",
+            ok=binary_ok,
+            hint="" if binary_ok else "install Claude Code or set JANUS_CLAUDE_PATH",
+        )
+    )
+
+    # 2. JANUS_HOME writable — create if missing, then verify a write round-trip
+    try:
+        settings.home.mkdir(parents=True, exist_ok=True)
+        probe_file = settings.home / ".doctor-probe"
+        probe_file.write_text("ok", encoding="utf-8")
+        probe_file.unlink()
+        home_ok, home_hint = True, ""
+    except OSError:
+        home_ok, home_hint = False, f"check permissions on {settings.home}"
+    checks.append(DoctorCheck(label="janus home writable", ok=home_ok, hint=home_hint))
+
+    # 3. Auth probe — cheap real call via injected probe_fn
+    auth_ok, _detail = probe_fn(settings.claude_path)
+    checks.append(
+        DoctorCheck(
+            label="claude auth",
+            ok=auth_ok,
+            hint="" if auth_ok else "set ANTHROPIC_API_KEY or run `claude login`",
+        )
+    )
+
+    return checks
+
+
+def _print_doctor_report(checks: list[DoctorCheck]) -> None:
+    for chk in checks:
+        symbol = "✓" if chk.ok else "✗"
+        print(f"  {symbol} {chk.label}")
+        if not chk.ok and chk.hint:
+            print(f"      hint: {chk.hint}")
 
 
 def _default_target(surface: Surface) -> Path:
@@ -206,6 +271,11 @@ def _print_report(report: SleepReport) -> None:
 def _dispatch(action: str, sub_args: tuple[str, ...] = ()) -> int:
     settings = load_settings()
 
+    if action == "doctor":
+        checks = _doctor_checks(settings, probe_auth)
+        _print_doctor_report(checks)
+        return 0 if all(chk.ok for chk in checks) else 1
+
     if action == "ignore":
         store = IgnorePatternStore(settings.home)
         subcmd = sub_args[0] if sub_args else ""
@@ -261,6 +331,7 @@ def _dispatch(action: str, sub_args: tuple[str, ...] = ()) -> int:
         latest = FileProposalStore(settings.home, SystemClock()).latest()
         if latest is None:
             print("janus: no staged proposal.")
+            print("  hint: run `janus doctor` to verify auth and environment.")
             return 0
         print(f"janus: latest staged proposal ({latest.created})")
         print(f"  target : {latest.target_path}")
@@ -286,7 +357,7 @@ def _dispatch(action: str, sub_args: tuple[str, ...] = ()) -> int:
         return 1
 
     print(f"janus: unknown action {action!r}")
-    print("usage: janus [dry-run|run|status|adopt|harvest]")
+    print("usage: janus [doctor|dry-run|run|status|adopt|harvest|ignore]")
     return 2
 
 
