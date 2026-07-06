@@ -128,8 +128,10 @@ Inside Claude Code these are exposed as `/janus:janus dry-run | run | status | a
 
 ## Configuration
 
-All configuration is environment variables, so the plugin command stays declarative. Read from
-`load_settings` (`cli.py`) and the capture hook.
+Configuration is environment variables (session-scoped), so the plugin command stays declarative.
+Read from `load_settings` (`cli.py`) and the capture hook. The one durable exception is the ignore
+store: `janus ignore add` persists patterns to `$JANUS_HOME/ignore-patterns` across sessions
+(see [Durable ignore patterns](#durable-ignore-patterns) below).
 
 ### Cycle & surface
 
@@ -155,7 +157,19 @@ All configuration is environment variables, so the plugin command stays declarat
 | `JANUS_MIN_RECURRENCE` | `2` | Distinct sessions a normalized intent must appear in to count as recurring. |
 | `JANUS_MINE_CORRECTIONS` | on | Mine `(request, correction)` pairs in addition to recurrence. Off → recurrence only. |
 | `JANUS_MAX_CORRECTIONS` | `20` | Budget on classifier calls per run (cost control). |
-| `JANUS_IGNORE_PATTERNS` | — | User-specific noise to drop, **one substring pattern per line** (e.g. a personal automation's prompt). Generic harness noise is filtered for everyone, separately. |
+| `JANUS_IGNORE_PATTERNS` | — | Session-scoped noise to drop, **one substring pattern per line**. For durable patterns, use `janus ignore add <pattern>` instead (persisted to `$JANUS_HOME/ignore-patterns`). Both sources are merged at startup. |
+
+#### Durable ignore patterns
+
+`JANUS_IGNORE_PATTERNS` is ephemeral (env-var, gone after the session). To persist patterns across sessions, use the `ignore` subcommand:
+
+```sh
+janus ignore add "PROSPECT:"       # add a noise pattern
+janus ignore list                  # show all stored patterns
+janus ignore remove "PROSPECT:"    # remove a pattern
+```
+
+Patterns are stored in `$JANUS_HOME/ignore-patterns` (one substring per line). At startup, stored patterns are unioned with any `JANUS_IGNORE_PATTERNS` env-var value; duplicates are dropped.
 
 ### Split & gate
 
