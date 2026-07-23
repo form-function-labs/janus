@@ -117,10 +117,26 @@ class ClaudeCliWorker:
     # --- target role ----------------------------------------------------
     @beartype
     def run(self, task: Task, context: str) -> RolloutResult:
-        output = self._call(_run_prompt(task.intent, context))
         rubric = task.rubric if isinstance(task, RealTask) else ""
         lesson = task.lesson if isinstance(task, RealTask) else ""
-        score = self._judge(task.intent, output, rubric)
+        try:
+            output = self._call(_run_prompt(task.intent, context))
+            score = self._judge(task.intent, output, rubric)
+        except WorkerError as exc:
+            if not isinstance(exc.__cause__, subprocess.TimeoutExpired):
+                raise  # a real failure (bad auth, bad exit) must still abort loudly
+            # A slow rollout must not sink the whole mining pass: score it as a
+            # failure and keep going. Still fail-LOUD — Cycle surfaces the count
+            # in SleepReport rather than letting it hide inside an 0.0 score.
+            return RolloutResult(
+                task.id,
+                Score(0.0),
+                tool_invoked=False,
+                transcript=f"<worker timeout after {self._timeout}s: {exc}>",
+                lesson=lesson,
+                rubric=rubric,
+                timed_out=True,
+            )
         # Memory-surface tasks run text-only (tools disallowed), so no tool use.
         # Carry the correction's distilled lesson + rubric so the optimizer can
         # encode them directly instead of reverse-engineering from the transcript.
@@ -184,8 +200,27 @@ class ClaudeCliWorker:
             except (OSError, subprocess.TimeoutExpired) as exc:
                 raise WorkerError(f"claude -p failed to run: {exc}") from exc
         if proc.returncode != 0:
-            raise WorkerError(f"claude -p exited {proc.returncode}: {proc.stderr.strip()[:300]}")
+            raise WorkerError(f"claude -p exited {proc.returncode}: {_failure_detail(proc)}")
         return proc.stdout
+
+
+def _failure_detail(proc: subprocess.CompletedProcess[str]) -> str:
+    """Build an actionable failure detail from BOTH output streams.
+
+    `--bare` auth failures ("Not logged in · Please run /login") print to
+    STDOUT, not stderr — stderr-only reporting left that case with an empty
+    detail. Include both (not stderr-with-stdout-as-fallback) so a caller
+    debugging a mixed failure sees the whole picture; fall back to the exit
+    code only when the process produced no output on either stream.
+    """
+    stderr = proc.stderr.strip()
+    stdout = proc.stdout.strip()
+    parts = []
+    if stderr:
+        parts.append(f"stderr: {stderr[:300]}")
+    if stdout:
+        parts.append(f"stdout: {stdout[:300]}")
+    return " | ".join(parts) if parts else f"(no output; exit code {proc.returncode})"
 
 
 # --- prompts ---------------------------------------------------------------

@@ -13,6 +13,7 @@ import shutil
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 
 from .clock import SystemClock
@@ -60,6 +61,8 @@ class Settings:
     max_corrections: int = 20
     surface: Surface = Surface.MEMORY
     judge_model: str = ""
+    target_timeout: int = 600  # rollouts replay real harvested prompts; 120s is too tight
+    stale_staging_days: int = 7
 
 
 @dataclass(frozen=True, slots=True)
@@ -123,6 +126,12 @@ def _print_doctor_report(checks: list[DoctorCheck]) -> None:
         print(f"  {symbol} {chk.label}")
         if not chk.ok and chk.hint:
             print(f"      hint: {chk.hint}")
+
+
+class AuthPreflightError(RuntimeError):
+    """``--bare`` workers need a working claude auth session; an OAuth ``/login`` session never
+    reaches them — this is raised before any mining work starts, so a broken auth setup fails in
+    one line instead of after a harvest+mine pass discovers it on the first ``claude -p`` call."""
 
 
 def _default_target(surface: Surface) -> Path:
@@ -194,6 +203,8 @@ def load_settings() -> Settings:
         mine_corrections=_env_bool("JANUS_MINE_CORRECTIONS", True),
         max_corrections=_env_int("JANUS_MAX_CORRECTIONS", 20),
         judge_model=os.environ.get("JANUS_JUDGE_MODEL", ""),
+        target_timeout=_env_int("JANUS_TIMEOUT", 600),
+        stale_staging_days=_env_int("JANUS_STALE_STAGING_DAYS", 7),
     )
 
 
@@ -227,6 +238,7 @@ def build_cycle(settings: Settings) -> Cycle:
             model=settings.target_model,
             claude_path=settings.claude_path,
             judge_model=settings.judge_model,
+            timeout=settings.target_timeout,
         ),
         optimizer=ClaudeCliWorker(
             role="optimizer",
@@ -249,9 +261,56 @@ def _cycle_config(settings: Settings) -> CycleConfig:
     )
 
 
+def _check_auth_preflight(settings: Settings) -> None:
+    """Fail fast, before any mining work, using the SAME real auth probe ``doctor``
+    uses — :func:`~janus.worker.probe_auth` — so there is exactly one diagnostic
+    path for "is auth OK", not two that can silently drift out of sync.
+
+    ``--bare`` (unconditionally set on every worker invocation, see
+    ``worker/claude_cli.py``) bypasses the OAuth keychain session an interactive
+    ``claude /login`` sets up. Checking here saves a full harvest+mine pass just
+    to discover the first real ``claude -p`` call was always going to fail.
+    """
+    ok, detail = probe_auth(settings.claude_path)
+    if not ok:
+        raise AuthPreflightError(
+            "janus's auth probe failed"
+            f"{f': {detail}' if detail else ''} — `--bare` workers bypass the OAuth "
+            "keychain session `claude /login` sets up, so they need ANTHROPIC_API_KEY "
+            "instead. Export it, run under a secrets manager (e.g. `doppler run -- "
+            "janus run`), or run `janus doctor` for a full diagnostic."
+        )
+
+
+def _check_stale_staging(settings: Settings) -> None:
+    """Warn loudly if a staged proposal has been sitting un-adopted past the staleness
+    threshold. `run` neither supersedes nor discards existing staging on its own, so a
+    forgotten proposal can rot silently for weeks — this makes that visible every run."""
+    latest = FileProposalStore(settings.home, SystemClock()).latest()
+    if latest is None:
+        return
+    try:
+        created = datetime.fromisoformat(latest.created)
+    except ValueError:
+        return  # malformed timestamp on disk — don't block a run over an unparsable record
+    if created.tzinfo is None:
+        created = created.replace(tzinfo=UTC)
+    age_days = (datetime.now(UTC) - created).days
+    if age_days >= settings.stale_staging_days:
+        print(
+            f"janus: ⚠ staged proposal is {age_days}d old (target: {latest.target_path}) "
+            "— run `janus adopt` to apply it before this run stages a new one on top."
+        )
+
+
 def _print_report(report: SleepReport) -> None:
     print(f"  sessions harvested : {report.sessions}")
     print(f"  recurring tasks    : {report.tasks_mined}  (train {report.train} / val {report.val})")
+    if report.timed_out_rollouts:
+        print(
+            f"  ⚠ rollout timeouts : {report.timed_out_rollouts} "
+            "(scored as failed, non-fatal — raise JANUS_TIMEOUT if this recurs)"
+        )
     print(f"  edits proposed     : {report.edits_proposed}")
     if report.decision in ("rejected", "preview", "staged"):
         print(
@@ -322,6 +381,9 @@ def _dispatch(action: str, sub_args: tuple[str, ...] = ()) -> int:
         return 0
 
     if action in ("dry-run", "run"):
+        _check_auth_preflight(settings)
+        if action == "run":
+            _check_stale_staging(settings)
         print(f"janus {action}: optimizing {settings.surface.value} @ {settings.target_path}")
         report = build_cycle(settings).run(_cycle_config(settings), stage=(action == "run"))
         _print_report(report)
@@ -371,6 +433,9 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     except WorkerError as exc:
         print(f"janus: worker failed: {exc}")
+        return 1
+    except AuthPreflightError as exc:
+        print(f"janus: {exc}")
         return 1
 
 

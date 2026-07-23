@@ -141,6 +141,7 @@ store: `janus ignore add` persists patterns to `$JANUS_HOME/ignore-patterns` acr
 | `JANUS_TARGET` | derived from surface + cwd | Path to the markdown file being optimized. Memory defaults to `~/.claude/projects/<encoded-cwd>/memory/MEMORY.md`; `claude_md` to `./CLAUDE.md`; **skill has no universal default — set this explicitly**. |
 | `JANUS_HOME` | `~/.janus` | Janus's state dir: staged proposals, the gzip archive, the inbox, the lockfile, the `OFF` kill switch. |
 | `JANUS_PROJECTS_DIR` | `~/.claude/projects` | Root of live Claude Code transcripts. |
+| `JANUS_STALE_STAGING_DAYS` | `7` | `run` warns loudly (age + target + adopt hint) if a staged proposal is older than this — `run` neither supersedes nor discards existing staging on its own. |
 
 ### Models & worker
 
@@ -149,6 +150,8 @@ store: `janus ignore add` persists patterns to `$JANUS_HOME/ignore-patterns` acr
 | `JANUS_OPTIMIZER_MODEL` | `sonnet` | The (stronger) model that proposes edits. |
 | `JANUS_TARGET_MODEL` | `haiku` | The model that executes tasks, judges, and classifies corrections. |
 | `JANUS_CLAUDE_PATH` | `claude` | Path to the `claude` binary the worker shells out to. |
+| `ANTHROPIC_API_KEY` | — | **Required** for `dry-run`/`run`. Workers always run `--bare`, which bypasses the OAuth keychain session `claude /login` sets up — an interactive login never reaches them. `run`/`dry-run` preflight this and fail fast with an actionable message if it's missing. |
+| `JANUS_TIMEOUT` | `600` | Per-call subprocess timeout (seconds) for the **target/rollout** worker — it replays real harvested prompts, which routinely exceed a tight timeout. A timed-out rollout is scored as a failure and reported, not a run-aborting error. The classifier role keeps the tighter 120s default. |
 
 ### Mining
 

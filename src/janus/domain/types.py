@@ -131,6 +131,7 @@ class RolloutResult:
     transcript: str = ""
     lesson: str = ""  # distilled rule from the task's correction, carried for the optimizer
     rubric: str = ""  # the gradeable criterion this rollout was judged against
+    timed_out: bool = False  # worker hit its timeout — scored 0.0 but distinct from a bad answer
 
 
 @dataclass(frozen=True, slots=True)
