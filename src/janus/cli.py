@@ -13,6 +13,7 @@ import shutil
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 
 from .clock import SystemClock
@@ -61,6 +62,7 @@ class Settings:
     surface: Surface = Surface.MEMORY
     judge_model: str = ""
     target_timeout: int = 600  # rollouts replay real harvested prompts; 120s is too tight
+    stale_staging_days: int = 7
 
 
 @dataclass(frozen=True, slots=True)
@@ -202,6 +204,7 @@ def load_settings() -> Settings:
         max_corrections=_env_int("JANUS_MAX_CORRECTIONS", 20),
         judge_model=os.environ.get("JANUS_JUDGE_MODEL", ""),
         target_timeout=_env_int("JANUS_TIMEOUT", 600),
+        stale_staging_days=_env_int("JANUS_STALE_STAGING_DAYS", 7),
     )
 
 
@@ -276,6 +279,27 @@ def _check_auth_preflight(settings: Settings) -> None:
             "keychain session `claude /login` sets up, so they need ANTHROPIC_API_KEY "
             "instead. Export it, run under a secrets manager (e.g. `doppler run -- "
             "janus run`), or run `janus doctor` for a full diagnostic."
+        )
+
+
+def _check_stale_staging(settings: Settings) -> None:
+    """Warn loudly if a staged proposal has been sitting un-adopted past the staleness
+    threshold. `run` neither supersedes nor discards existing staging on its own, so a
+    forgotten proposal can rot silently for weeks — this makes that visible every run."""
+    latest = FileProposalStore(settings.home, SystemClock()).latest()
+    if latest is None:
+        return
+    try:
+        created = datetime.fromisoformat(latest.created)
+    except ValueError:
+        return  # malformed timestamp on disk — don't block a run over an unparsable record
+    if created.tzinfo is None:
+        created = created.replace(tzinfo=UTC)
+    age_days = (datetime.now(UTC) - created).days
+    if age_days >= settings.stale_staging_days:
+        print(
+            f"janus: ⚠ staged proposal is {age_days}d old (target: {latest.target_path}) "
+            "— run `janus adopt` to apply it before this run stages a new one on top."
         )
 
 
@@ -358,6 +382,8 @@ def _dispatch(action: str, sub_args: tuple[str, ...] = ()) -> int:
 
     if action in ("dry-run", "run"):
         _check_auth_preflight(settings)
+        if action == "run":
+            _check_stale_staging(settings)
         print(f"janus {action}: optimizing {settings.surface.value} @ {settings.target_path}")
         report = build_cycle(settings).run(_cycle_config(settings), stage=(action == "run"))
         _print_report(report)
