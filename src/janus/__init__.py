@@ -7,4 +7,4 @@ Two faces: one reads the past (finished transcripts), one shapes the future
 
 from __future__ import annotations
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"

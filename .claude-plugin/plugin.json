@@ -1,7 +1,7 @@
 {
   "name": "janus",
   "description": "Two-faced REM-sleep optimizer for Claude Code: gated, validated, staged self-improvement over memory, skills, and CLAUDE.md — without touching model weights.",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "author": {
     "name": "Mythwave"
   },
