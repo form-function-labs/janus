@@ -10,18 +10,56 @@ permissions:
   contents: write
   pull-requests: write
 
-# KNOWN LIMITATION (pilot-accepted): the default GITHUB_TOKEN cannot trigger
-# the `CI` workflow on the release PR that release-please opens (GitHub
-# suppresses workflow_run/pull_request events from actions using the default
-# token, to prevent recursive-trigger loops). The release PR will therefore
-# show no CI check until someone pushes an empty commit or re-triggers with a
-# PAT/GitHub App token. Production fix: mint a scoped org GitHub App token
-# (or a bot PAT) and swap it in as the `token:` input below.
+# Auth: a GitHub App token (GH_APP_ID + GH_APP_PRIVATE_KEY repo secrets) is
+# minted per run. This is what lets the bot create PRs under the org's strict
+# Actions policy, lets CI trigger on the release PR (App pushes are not
+# suppressed like default-GITHUB_TOKEN pushes), and lets the uv.lock refresh
+# step below push to the release branch. Fallback: if the secrets are absent
+# the token step fails loudly — never silently degrade to GITHUB_TOKEN.
 jobs:
   release-please:
     runs-on: ubuntu-latest
     steps:
-      - uses: googleapis/release-please-action@5c625bfb5d1ff62eadeeb3772007f7f66fdcf071 # v4
+      - name: Mint GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
         with:
+          app-id: ${{ secrets.GH_APP_ID }}
+          private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+
+      - name: release-please
+        id: release
+        uses: googleapis/release-please-action@5c625bfb5d1ff62eadeeb3772007f7f66fdcf071 # v4
+        with:
+          token: ${{ steps.app-token.outputs.token }}
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
+
+      # release-please bumps pyproject.toml but cannot run `uv lock`; without
+      # this, `uv sync --locked` in CI correctly reds the release PR (kink #3
+      # from the 2026-07-23 pilot). Refresh and push only when the lockfile
+      # actually drifts.
+      - name: Checkout release branch
+        if: ${{ steps.release.outputs.prs_created == 'true' }}
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: release-please--branches--main
+          token: ${{ steps.app-token.outputs.token }}
+
+      - name: Setup uv
+        if: ${{ steps.release.outputs.prs_created == 'true' }}
+        uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+
+      - name: Refresh uv.lock on the release PR
+        if: ${{ steps.release.outputs.prs_created == 'true' }}
+        run: |
+          uv lock
+          if ! git diff --quiet uv.lock; then
+            git config user.name "janus-release-bot[app]"
+            git config user.email "janus-release-bot@users.noreply.github.com"
+            git add uv.lock
+            git commit -m "build(release): refresh uv.lock"
+            git push origin HEAD:release-please--branches--main
+          else
+            echo "uv.lock already current"
+          fi
