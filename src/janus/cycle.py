@@ -56,6 +56,7 @@ class SleepReport:
     staging_dir: str = ""
     message: str = ""
     edits: tuple[Edit, ...] = ()
+    timed_out_rollouts: int = 0  # rollouts that hit the worker timeout — scored failed, not fatal
 
 
 @dataclass
@@ -97,6 +98,7 @@ class Cycle:
 
         baseline = self.state.read()
         evidence = [self.target.run(task, baseline) for task in train]
+        timed_out = sum(1 for r in evidence if r.timed_out)
         edits = list(self.optimizer.reflect(baseline, evidence))
         if not edits:
             return SleepReport(
@@ -107,14 +109,16 @@ class Cycle:
                 0,
                 "no-edits",
                 message="Optimizer proposed no edits (nothing to repair on these tasks).",
+                timed_out_rollouts=timed_out,
             )
 
         candidate = self.state.render(edits)
         pairs: list[PairedOutcome] = []
         for task in val:
-            baseline_score = self.target.run(task, baseline).score
-            candidate_score = self.target.run(task, candidate).score
-            pairs.append(PairedOutcome(task.id, baseline_score, candidate_score))
+            baseline_result = self.target.run(task, baseline)
+            candidate_result = self.target.run(task, candidate)
+            timed_out += int(baseline_result.timed_out) + int(candidate_result.timed_out)
+            pairs.append(PairedOutcome(task.id, baseline_result.score, candidate_result.score))
 
         outcome = gate(pairs, config.policy)
         effect = outcome.effect
@@ -131,6 +135,7 @@ class Cycle:
                 effect.regressions,
                 message="Gate rejected: no net improvement on held-out tasks without regressions.",
                 edits=tuple(edits),
+                timed_out_rollouts=timed_out,
             )
 
         proposal = Proposal(
@@ -159,4 +164,5 @@ class Cycle:
             if stage
             else "Dry-run preview; nothing staged.",
             edits=tuple(edits),
+            timed_out_rollouts=timed_out,
         )

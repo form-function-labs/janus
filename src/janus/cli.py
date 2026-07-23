@@ -60,6 +60,7 @@ class Settings:
     max_corrections: int = 20
     surface: Surface = Surface.MEMORY
     judge_model: str = ""
+    target_timeout: int = 600  # rollouts replay real harvested prompts; 120s is too tight
 
 
 @dataclass(frozen=True, slots=True)
@@ -194,6 +195,7 @@ def load_settings() -> Settings:
         mine_corrections=_env_bool("JANUS_MINE_CORRECTIONS", True),
         max_corrections=_env_int("JANUS_MAX_CORRECTIONS", 20),
         judge_model=os.environ.get("JANUS_JUDGE_MODEL", ""),
+        target_timeout=_env_int("JANUS_TIMEOUT", 600),
     )
 
 
@@ -227,6 +229,7 @@ def build_cycle(settings: Settings) -> Cycle:
             model=settings.target_model,
             claude_path=settings.claude_path,
             judge_model=settings.judge_model,
+            timeout=settings.target_timeout,
         ),
         optimizer=ClaudeCliWorker(
             role="optimizer",
@@ -252,6 +255,11 @@ def _cycle_config(settings: Settings) -> CycleConfig:
 def _print_report(report: SleepReport) -> None:
     print(f"  sessions harvested : {report.sessions}")
     print(f"  recurring tasks    : {report.tasks_mined}  (train {report.train} / val {report.val})")
+    if report.timed_out_rollouts:
+        print(
+            f"  ⚠ rollout timeouts : {report.timed_out_rollouts} "
+            "(scored as failed, non-fatal — raise JANUS_TIMEOUT if this recurs)"
+        )
     print(f"  edits proposed     : {report.edits_proposed}")
     if report.decision in ("rejected", "preview", "staged"):
         print(
