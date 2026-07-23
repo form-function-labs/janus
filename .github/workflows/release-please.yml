@@ -1,0 +1,26 @@
+name: release-please
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+  pull-requests: write
+
+# KNOWN LIMITATION (pilot-accepted): the default GITHUB_TOKEN cannot trigger
+# the `CI` workflow on the release PR that release-please opens (GitHub
+# suppresses workflow_run/pull_request events from actions using the default
+# token, to prevent recursive-trigger loops). The release PR will therefore
+# show no CI check until someone pushes an empty commit or re-triggers with a
+# PAT/GitHub App token. Production fix: mint a scoped org GitHub App token
+# (or a bot PAT) and swap it in as the `token:` input below.
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: googleapis/release-please-action@5c625bfb5d1ff62eadeeb3772007f7f66fdcf071 # v4
+        with:
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
