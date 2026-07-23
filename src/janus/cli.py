@@ -126,6 +126,12 @@ def _print_doctor_report(checks: list[DoctorCheck]) -> None:
             print(f"      hint: {chk.hint}")
 
 
+class AuthPreflightError(RuntimeError):
+    """``--bare`` workers need a working claude auth session; an OAuth ``/login`` session never
+    reaches them — this is raised before any mining work starts, so a broken auth setup fails in
+    one line instead of after a harvest+mine pass discovers it on the first ``claude -p`` call."""
+
+
 def _default_target(surface: Surface) -> Path:
     cwd = Path.cwd()
     if surface is Surface.CLAUDE_MD:
@@ -252,6 +258,27 @@ def _cycle_config(settings: Settings) -> CycleConfig:
     )
 
 
+def _check_auth_preflight(settings: Settings) -> None:
+    """Fail fast, before any mining work, using the SAME real auth probe ``doctor``
+    uses — :func:`~janus.worker.probe_auth` — so there is exactly one diagnostic
+    path for "is auth OK", not two that can silently drift out of sync.
+
+    ``--bare`` (unconditionally set on every worker invocation, see
+    ``worker/claude_cli.py``) bypasses the OAuth keychain session an interactive
+    ``claude /login`` sets up. Checking here saves a full harvest+mine pass just
+    to discover the first real ``claude -p`` call was always going to fail.
+    """
+    ok, detail = probe_auth(settings.claude_path)
+    if not ok:
+        raise AuthPreflightError(
+            "janus's auth probe failed"
+            f"{f': {detail}' if detail else ''} — `--bare` workers bypass the OAuth "
+            "keychain session `claude /login` sets up, so they need ANTHROPIC_API_KEY "
+            "instead. Export it, run under a secrets manager (e.g. `doppler run -- "
+            "janus run`), or run `janus doctor` for a full diagnostic."
+        )
+
+
 def _print_report(report: SleepReport) -> None:
     print(f"  sessions harvested : {report.sessions}")
     print(f"  recurring tasks    : {report.tasks_mined}  (train {report.train} / val {report.val})")
@@ -330,6 +357,7 @@ def _dispatch(action: str, sub_args: tuple[str, ...] = ()) -> int:
         return 0
 
     if action in ("dry-run", "run"):
+        _check_auth_preflight(settings)
         print(f"janus {action}: optimizing {settings.surface.value} @ {settings.target_path}")
         report = build_cycle(settings).run(_cycle_config(settings), stage=(action == "run"))
         _print_report(report)
@@ -379,6 +407,9 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     except WorkerError as exc:
         print(f"janus: worker failed: {exc}")
+        return 1
+    except AuthPreflightError as exc:
+        print(f"janus: {exc}")
         return 1
 
 

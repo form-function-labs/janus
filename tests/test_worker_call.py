@@ -1,4 +1,5 @@
-"""Tests for ``ClaudeCliWorker``'s transport layer: timeout handling (D1).
+"""Tests for ``ClaudeCliWorker``'s transport layer: timeout handling (D1) and
+error-message construction (D2).
 
 Fixtures monkeypatch ``subprocess.run`` directly rather than shelling out to a
 real ``claude`` binary, so these stay fast and fully offline.
@@ -67,4 +68,42 @@ def test_oserror_still_raises_not_scored() -> None:
         patch("subprocess.run", side_effect=OSError("claude: command not found")),
         pytest.raises(WorkerError),
     ):
+        worker.run(_task(), "context")
+
+
+# --- D2: WorkerError must carry stdout, not just stderr ---------------------
+
+
+def test_worker_error_includes_stdout_tail_when_stderr_empty() -> None:
+    """`--bare` auth failures print 'Not logged in ...' to STDOUT, not stderr.
+    Before this fix the WorkerError message was empty in that exact case."""
+    proc = subprocess.CompletedProcess(
+        args=["claude"], returncode=1, stdout="Not logged in · Please run /login", stderr=""
+    )
+    worker = ClaudeCliWorker(role="target", model="haiku")
+    with (
+        patch("subprocess.run", return_value=proc),
+        pytest.raises(WorkerError, match="Not logged in"),
+    ):
+        worker.run(_task(), "context")
+
+
+def test_worker_error_includes_both_stderr_and_stdout_when_present() -> None:
+    """stdout is ADDED, not just a fallback-when-stderr-empty — a caller
+    debugging a failure should see both channels."""
+    proc = subprocess.CompletedProcess(
+        args=["claude"], returncode=1, stdout="stdout detail", stderr="stderr detail"
+    )
+    worker = ClaudeCliWorker(role="target", model="haiku")
+    with patch("subprocess.run", return_value=proc), pytest.raises(WorkerError) as exc_info:
+        worker.run(_task(), "context")
+    assert "stdout detail" in str(exc_info.value)
+    assert "stderr detail" in str(exc_info.value)
+
+
+def test_worker_error_falls_back_to_exit_code_when_both_empty() -> None:
+    """Boundary pin: exit code alone must never produce an empty detail."""
+    proc = subprocess.CompletedProcess(args=["claude"], returncode=7, stdout="", stderr="")
+    worker = ClaudeCliWorker(role="target", model="haiku")
+    with patch("subprocess.run", return_value=proc), pytest.raises(WorkerError, match="7"):
         worker.run(_task(), "context")

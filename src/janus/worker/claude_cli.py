@@ -200,8 +200,27 @@ class ClaudeCliWorker:
             except (OSError, subprocess.TimeoutExpired) as exc:
                 raise WorkerError(f"claude -p failed to run: {exc}") from exc
         if proc.returncode != 0:
-            raise WorkerError(f"claude -p exited {proc.returncode}: {proc.stderr.strip()[:300]}")
+            raise WorkerError(f"claude -p exited {proc.returncode}: {_failure_detail(proc)}")
         return proc.stdout
+
+
+def _failure_detail(proc: subprocess.CompletedProcess[str]) -> str:
+    """Build an actionable failure detail from BOTH output streams.
+
+    `--bare` auth failures ("Not logged in · Please run /login") print to
+    STDOUT, not stderr — stderr-only reporting left that case with an empty
+    detail. Include both (not stderr-with-stdout-as-fallback) so a caller
+    debugging a mixed failure sees the whole picture; fall back to the exit
+    code only when the process produced no output on either stream.
+    """
+    stderr = proc.stderr.strip()
+    stdout = proc.stdout.strip()
+    parts = []
+    if stderr:
+        parts.append(f"stderr: {stderr[:300]}")
+    if stdout:
+        parts.append(f"stdout: {stdout[:300]}")
+    return " | ".join(parts) if parts else f"(no output; exit code {proc.returncode})"
 
 
 # --- prompts ---------------------------------------------------------------
