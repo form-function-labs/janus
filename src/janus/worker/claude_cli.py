@@ -51,6 +51,46 @@ class WorkerError(RuntimeError):
     """``claude -p`` failed. Raised loudly rather than silently scoring zero."""
 
 
+def probe_auth(claude_path: str) -> tuple[bool, str]:
+    """Cheap real probe: ``claude -p ok --model haiku``.
+
+    Returns ``(True, "")`` on success, ``(False, "<error detail>")`` on failure.
+    Intended for the ``doctor`` preflight check only — not the main rollout path.
+    Unit tests inject a replacement via the *probe_fn* parameter on
+    ``_doctor_checks`` so CI never spawns a real model call.
+    """
+    cmd = [
+        claude_path,
+        "-p",
+        "ok",
+        "--output-format",
+        "text",
+        "--bare",
+        "--model",
+        "haiku",
+    ]
+    try:
+        proc = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return False, str(exc)
+    if proc.returncode != 0:
+        # Fall back to stdout, then the exit code, so doctor always has an
+        # actionable reason even when the CLI exits non-zero with empty stderr.
+        detail = (
+            proc.stderr.strip()
+            or proc.stdout.strip()
+            or f"claude exited with code {proc.returncode}"
+        )
+        return False, detail[:200]
+    return True, ""
+
+
 class ClaudeCliWorker:
     """Implements ``TargetWorker.run``, ``OptimizerWorker.reflect``, and
     ``CorrectionClassifier.classify_correction``."""
